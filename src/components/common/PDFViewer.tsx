@@ -5,14 +5,8 @@ import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
 
 // Configure PDF.js worker
-// Ensure the worker is copied to your public/dist folder or served correctly.
-// The URL should point to where pdf.worker.min.js (or pdf.worker.mjs for newer versions) is accessible.
-// Create a symbolic link from `node_modules/pdfjs-dist/build/pdf.worker.mjs` to `public/pdf.worker.mjs`
-// Or copy the file during your build process.
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.mjs',
-  import.meta.url,
-).toString();
+// Using absolute path to PDF worker in the public directory
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.js';
 
 interface PDFViewerProps {
   file: File | Blob | null; // PDF file blob or File object

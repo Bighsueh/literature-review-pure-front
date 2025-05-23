@@ -1,5 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjs from 'pdfjs-dist';
+
+// Configure PDF.js worker
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.js';
 import { usePDFViewer } from '../../../hooks/usePDFViewer';
 import { 
   ChevronLeftIcon, 
@@ -12,13 +15,13 @@ import { useFileStore } from '../../../stores/fileStore';
 interface PDFPreviewProps {
   fileId?: string;
   highlightText?: string;
-  onTextHighlighted?: (text: string, position: any) => void;
+  onTextHighlighted?: (text: string, position: { x: number; y: number; width: number; height: number }) => void;
 }
 
 const PDFPreview: React.FC<PDFPreviewProps> = ({
   fileId,
   highlightText,
-  onTextHighlighted
+  // onTextHighlighted // Not used in this component
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { files } = useFileStore();
@@ -32,7 +35,7 @@ const PDFPreview: React.FC<PDFPreviewProps> = ({
     isLoading,
     error,
     loadPDF,
-    renderPage,
+    // renderPage, // Not used in this component
     searchText,
     setCurrentPage
   } = usePDFViewer();
