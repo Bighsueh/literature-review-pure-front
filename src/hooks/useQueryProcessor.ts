@@ -6,72 +6,101 @@ import { useFileStore } from '../stores/fileStore';
 import { useChatStore } from '../stores/chatStore';
 import { n8nAPI } from '../services/n8nAPI';
 import { ProcessedSentence } from '../types/file';
-import { Message } from '../types/chat';
+import { Message, Conversation } from '../types/chat';
 
 export const useQueryProcessor = () => {
   const { setProgress, setSelectedReferences } = useAppStore();
   const { sentences } = useFileStore();
-  const { addMessage, setCurrentConversation, conversations } = useChatStore();
+  const addMessage = useChatStore((state) => state.addMessage);
+  const addConversation = useChatStore((state) => state.addConversation);
 
-  const processQuery = useCallback(async (query: string, conversationId?: string) => {
-    // 確保有對話 ID
-    const currentConversationId = conversationId || (() => {
-      // 如果沒有提供對話 ID，創建一個新對話或使用最近的對話
-      if (!conversations.length) {
-        const newConversationId = uuidv4();
-        const title = query.length > 30 ? `${query.substring(0, 30)}...` : query;
-        
-        const newConversation = {
-          id: newConversationId,
+  const processQuery = useCallback(async (queryText: string, conversationIdFromInput?: string) => {
+    let activeConversationId = conversationIdFromInput;
+    const currentConversationsFromStore = useChatStore.getState().conversations;
+
+    if (!activeConversationId) {
+      // No conversation ID provided by ChatInput (currentConversationId in store was null).
+      // Create a new conversation.
+      const newConvId = uuidv4();
+      const title = queryText.length > 30 ? `${queryText.substring(0, 30)}...` : queryText;
+      const newConversation: Conversation = {
+        id: newConvId,
+        title,
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      addConversation(newConversation); // This action also sets currentConversationId in the store.
+      activeConversationId = newConvId; // Use this new ID for adding messages.
+      console.log('Created new conversation with ID:', activeConversationId);
+    } else {
+      // A conversation ID was provided. Let's ensure it actually exists in the store.
+      // This is a defensive check; ideally, it should always exist if provided.
+      const conversationExists = currentConversationsFromStore.some(c => c.id === activeConversationId);
+      if (!conversationExists) {
+        console.warn(`Provided conversationId ${activeConversationId} not found in store. Creating a new one.`);
+        const newConvId = uuidv4();
+        const title = queryText.length > 30 ? `${queryText.substring(0, 30)}...` : queryText;
+        const newConversation: Conversation = {
+          id: newConvId,
           title,
           messages: [],
           createdAt: new Date(),
-          updatedAt: new Date()
+          updatedAt: new Date(),
         };
-        
-        setCurrentConversation(newConversationId);
-        return newConversationId;
+        addConversation(newConversation);
+        activeConversationId = newConvId;
+      } else {
+        // If the provided ID exists, make sure it's set as the current one in the store,
+        // in case it wasn't already (e.g., if user switched conversations then submitted to an old one).
+        if (useChatStore.getState().currentConversationId !== activeConversationId) {
+            useChatStore.getState().setCurrentConversation(activeConversationId);
+            console.log('Set current conversation ID to existing:', activeConversationId);
+        }
       }
-      
-      return conversations[0].id;
-    })();
+    }
+
+    // At this point, activeConversationId is guaranteed to be a valid ID
+    // for a conversation that exists in the store. If it was newly created,
+    // addConversation has already set it as the currentConversationId in the store.
 
     try {
-      // 添加使用者訊息
-      const userMessageId = uuidv4();
-      const userMessage: Message = {
-        id: userMessageId,
-        type: 'user',
-        content: query,
-        timestamp: new Date()
-      };
-      
-      addMessage(currentConversationId, userMessage);
-
-      // 階段 1: 關鍵詞提取
       setProgress({
-        currentStage: 'extracting',
-        percentage: 10,
-        details: '提取查詢關鍵詞...',
+        currentStage: 'idle',
+        percentage: 0,
+        details: '開始處理查詢...',
         isProcessing: true,
         error: null
       });
 
+      const userMessageId = uuidv4();
+      const userMessage: Message = {
+        id: userMessageId,
+        type: 'user',
+        content: queryText,
+        timestamp: new Date()
+      };
+      addMessage(activeConversationId, userMessage);
+      console.log('Added user message to conversation:', activeConversationId, userMessage);
+
       const startTime = Date.now();
-      const keywordResult = await n8nAPI.extractKeywords(query);
+      setProgress({
+        currentStage: 'extracting',
+        percentage: 10,
+        details: '提取查詢關鍵詞...',
+        isProcessing: true
+      });
+
+      const keywordResult = await n8nAPI.extractKeywords(queryText);
       const keywords = keywordResult[0].output.keywords;
 
       setProgress({
         currentStage: 'extracting',
         percentage: 30,
-        details: {
-          stage: '關鍵詞提取完成',
-          keywords
-        },
+        details: { stage: '關鍵詞提取完成', keywords },
         isProcessing: true
       });
 
-      // 階段 2: 本地搜尋相關句子
       setProgress({
         currentStage: 'searching',
         percentage: 40,
@@ -86,102 +115,120 @@ export const useQueryProcessor = () => {
       setProgress({
         currentStage: 'searching',
         percentage: 60,
-        details: {
-          stage: '找到相關句子',
-          odSentences,
-          cdSentences,
-          total: relevantSentences.length
-        },
+        details: { stage: '找到相關句子', odSentences, cdSentences, total: relevantSentences.length },
         isProcessing: true
       });
 
-      // 階段 3: 生成回答
+      if (relevantSentences.length === 0) {
+        const noResultsMessage: Message = {
+          id: uuidv4(),
+          type: 'system',
+          content: '抱歉，根據您的查詢，在當前文件中找不到相關的定義。請嘗試不同的關鍵詞或上傳其他文件。',
+          timestamp: new Date(),
+          metadata: { query: queryText, keywords, processingTime: (Date.now() - startTime) / 1000 }
+        };
+        addMessage(activeConversationId, noResultsMessage);
+        setProgress({ currentStage: 'completed', percentage: 100, details: '找不到相關定義', isProcessing: false });
+        setSelectedReferences([]);
+        return;
+      }
+
       setProgress({
         currentStage: 'generating',
         percentage: 70,
-        details: '生成智能回答...',
+        details: '生成定義摘要...',
         isProcessing: true
       });
 
-      const response = await n8nAPI.organizeResponse({
+      const organizeApiResult = await n8nAPI.organizeResponse({
         "operational definition": odSentences.map(s => s.content),
         "conceptual definition": cdSentences.map(s => s.content),
-        "query": query
+        "query": queryText
       });
 
-      // 階段 4: 顯示結果
-      const processingTime = Date.now() - startTime;
-      
+      const organizedContent = organizeApiResult[0]?.output?.response || '無法生成摘要。';
+
+      setProgress({
+        currentStage: 'generating',
+        percentage: 90,
+        details: { stage: '回應生成完成', response: organizedContent },
+        isProcessing: true
+      });
+
+      const systemMessage: Message = {
+        id: uuidv4(),
+        type: 'system',
+        content: organizedContent,
+        references: relevantSentences,
+        metadata: {
+          query: queryText,
+          keywords,
+          relevantSentencesCount: relevantSentences.length,
+          processingTime: (Date.now() - startTime) / 1000,
+        },
+        timestamp: new Date()
+      };
+      addMessage(activeConversationId, systemMessage);
+      console.log('Added system message to conversation:', activeConversationId, systemMessage);
+
       setProgress({
         currentStage: 'completed',
         percentage: 100,
-        details: {
-          response: response[0].output.response,
-          references: relevantSentences
-        },
+        details: '處理完成！',
         isProcessing: false
       });
+      setSelectedReferences(relevantSentences || []);
 
-      // 更新引用句子
-      setSelectedReferences(relevantSentences);
-
-      // 添加系統回答訊息
-      const systemMessageId = uuidv4();
-      const systemMessage: Message = {
-        id: systemMessageId,
-        type: 'system',
-        content: response[0].output.response,
-        timestamp: new Date(),
-        references: relevantSentences,
-        metadata: {
-          query,
-          keywords,
-          processingTime,
-          totalReferences: relevantSentences.length
-        }
-      };
-
-      addMessage(currentConversationId, systemMessage);
-      
-      return {
-        response: response[0].output.response,
-        references: relevantSentences,
-        keywords
-      };
     } catch (error) {
-      console.error('Query processing error:', error);
-      
-      // 設置進度狀態為錯誤
+      console.error('Error in processQuery:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      addMessage(activeConversationId, {
+        id: uuidv4(),
+        type: 'system',
+        content: `處理查詢時發生錯誤: ${errorMessage}`,
+        timestamp: new Date(),
+        metadata: { error: true }
+      });
       setProgress({
         currentStage: 'error',
-        percentage: 0,
-        details: error,
+        percentage: 100,
+        details: `處理查詢時發生錯誤: ${errorMessage}`,
         isProcessing: false,
-        error: error instanceof Error ? error.message : String(error)
+        error: errorMessage,
       });
-      
-      // 添加錯誤訊息
-      const errorMessageId = uuidv4();
-      const errorMessage: Message = {
-        id: errorMessageId,
-        type: 'system',
-        content: '處理查詢時發生錯誤，請稍後再試。',
-        timestamp: new Date()
-      };
-      
-      addMessage(currentConversationId, errorMessage);
-      
-      throw error;
     }
-  }, [setProgress, sentences, addMessage, setCurrentConversation, conversations, setSelectedReferences]);
+  }, [addMessage, addConversation, sentences, setProgress, setSelectedReferences]);
 
-  // 本地句子搜尋功能
   const searchLocalSentences = (keywords: string[], allSentences: ProcessedSentence[]): ProcessedSentence[] => {
-    return allSentences.filter(sentence => 
-      keywords.some(keyword => 
-        sentence.content.toLowerCase().includes(keyword.toLowerCase())
-      )
-    );
+    if (!keywords || keywords.length === 0 || !allSentences || allSentences.length === 0) {
+      return [];
+    }
+  
+    const uniqueSentences = new Map<string, ProcessedSentence>();
+  
+    keywords.forEach(keyword => {
+      const regex = new RegExp(keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); // Escape special characters for regex
+      allSentences.forEach(sentence => {
+        if (regex.test(sentence.content)) {
+          if (!uniqueSentences.has(sentence.id)) {
+            uniqueSentences.set(sentence.id, sentence);
+          }
+        }
+      });
+    });
+  
+    const results = Array.from(uniqueSentences.values());
+    
+    results.sort((a, b) => {
+      const countA = keywords.filter(k => new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(a.content)).length;
+      const countB = keywords.filter(k => new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(b.content)).length;
+      if (countB !== countA) return countB - countA; // Higher count first
+      if (a.type === 'OD' && b.type !== 'OD') return -1; // OD prioritized
+      if (b.type === 'OD' && a.type !== 'OD') return 1;
+      return 0;
+    });
+
+    return results.slice(0, 20); // Limit to top 20 relevant sentences
   };
 
   return { processQuery };

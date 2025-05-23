@@ -17,12 +17,16 @@ interface ChatState {
   addMessage: (conversationId: string, message: Message) => void;
   updateMessage: (conversationId: string, messageId: string, updates: Partial<Message>) => void;
   removeMessage: (conversationId: string, messageId: string) => void;
+  resetStuckAssistantMessage: () => void;
 }
+
+// Keywords to identify a stuck assistant message
+const STUCK_MESSAGE_KEYWORDS = ["生成回答", "Generating"];
 
 export const useChatStore = create<ChatState>()(
   devtools(
     persist(
-      (set) => ({
+      (set, get) => ({ 
         conversations: [],
         currentConversationId: null,
         
@@ -82,7 +86,36 @@ export const useChatStore = create<ChatState>()(
                 } 
               : conversation
           )
-        }))
+        })),
+
+        resetStuckAssistantMessage: () => set(() => {
+          const { currentConversationId, conversations } = get(); 
+          if (!currentConversationId) return {};
+
+          const currentConversationIndex = conversations.findIndex(conv => conv.id === currentConversationId);
+          if (currentConversationIndex === -1) return {};
+
+          const currentConversation = conversations[currentConversationIndex];
+          if (!currentConversation.messages || currentConversation.messages.length === 0) return {};
+
+          const lastMessage = currentConversation.messages[currentConversation.messages.length - 1];
+
+          // Check if the last message is a system message and contains keywords indicating it's stuck
+          if (
+            lastMessage.type === 'system' && 
+            STUCK_MESSAGE_KEYWORDS.some(keyword => lastMessage.content.includes(keyword))
+          ) {
+            const updatedMessages = currentConversation.messages.slice(0, -1);
+            const updatedConversations = [...conversations];
+            updatedConversations[currentConversationIndex] = {
+              ...currentConversation,
+              messages: updatedMessages,
+              updatedAt: new Date(),
+            };
+            return { conversations: updatedConversations };
+          }
+          return {}; // No changes needed
+        }),
       }),
       { name: 'chat-storage' }
     )

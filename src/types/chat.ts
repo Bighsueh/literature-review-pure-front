@@ -15,6 +15,9 @@ export interface MessageMetadata {
   keywords?: string[];
   processingTime?: number;
   totalReferences?: number;
+  relevantSentencesCount?: number;
+  stages?: any;
+  error?: boolean | string;
 }
 
 export interface Conversation {
