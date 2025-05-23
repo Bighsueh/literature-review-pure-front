@@ -33,10 +33,19 @@ export const usePDFViewer = () => {
     setError(null);
     
     try {
-      const loadingTask = fileOrUrl instanceof File
-        ? pdfjs.getDocument(new Uint8Array(await fileOrUrl.arrayBuffer()))
-        : pdfjs.getDocument(fileOrUrl);
-        
+      let loadingTask;
+      
+      if (fileOrUrl instanceof File) {
+        // 從 File 對象加載 PDF
+        const arrayBuffer = await fileOrUrl.arrayBuffer();
+        loadingTask = pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) });
+      } else if (typeof fileOrUrl === 'string') {
+        // 從 URL 字符串加載 PDF
+        loadingTask = pdfjs.getDocument({ url: fileOrUrl });
+      } else {
+        throw new Error('Invalid input: expected File object or URL string');
+      }
+      
       const pdf = await loadingTask.promise;
       setPdfDocument(pdf);
       
