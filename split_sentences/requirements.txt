@@ -1,0 +1,15 @@
+fastapi==0.104.1
+uvicorn==0.23.2
+pydantic==2.4.2
+python-multipart==0.0.6
+spacy==3.7.2
+PyMuPDF==1.23.5
+pdfplumber==0.10.2
+tqdm==4.66.1
+websockets==11.0.3
+# 用於測試
+httpx==0.25.0
+pytest==7.4.3
+pytest-asyncio==0.21.1
+# 用於生產環境
+gunicorn==21.2.0 
