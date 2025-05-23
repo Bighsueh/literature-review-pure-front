@@ -37,3 +37,6 @@ dist-ssr
 
 # Coverage directory
 /coverage
+
+# PDF worker
+/public/pdf.worker.js
