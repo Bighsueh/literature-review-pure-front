@@ -52,7 +52,11 @@ const ProgressDisplay: React.FC = () => {
             {details.currentSentence && (
               <div className="mt-1 p-2 bg-gray-50 rounded text-xs">
                 <p className="font-medium">當前處理句子:</p>
-                <p className="italic mt-1">{details.currentSentence}</p>
+                <p className="italic mt-1">
+                  {typeof details.currentSentence === 'string'
+                    ? details.currentSentence
+                    : details.currentSentence.sentence || JSON.stringify(details.currentSentence)}
+                </p>
               </div>
             )}
             {details.processed && details.total && (
