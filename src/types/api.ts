@@ -1,9 +1,14 @@
 // types/api.ts
+export interface SentenceWithPage {
+  sentence: string;
+  page: number;
+}
+
 export interface SplitSentencesResponse {
-  sentences: string[];
+  sentences: string[] | SentenceWithPage[];
   success?: boolean;
   data?: {
-    sentences: string[];
+    sentences: string[] | SentenceWithPage[];
   };
 }
 
