@@ -1,33 +1,33 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../../../stores/appStore';
 import { useFileStore } from '../../../stores/fileStore'; 
-import PDFViewer from '../../common/PDFViewer'; 
 import { ProcessedSentence } from '../../../types/file'; 
-import { XMarkIcon } from '@heroicons/react/24/outline'; 
+import { XMarkIcon, DocumentTextIcon } from '@heroicons/react/24/outline'; 
 
 const ReferencesPanel: React.FC = () => {
   const { selectedReferences } = useAppStore();
   const { files } = useFileStore(); 
 
-  const [showPDFModal, setShowPDFModal] = useState(false);
-  const [pdfFileToView, setPdfFileToView] = useState<File | Blob | null>(null);
-  const [pdfPageToView, setPdfPageToView] = useState<number | undefined>(undefined);
+  const [showInfoModal, setShowInfoModal] = useState(false);
+  const [selectedReference, setSelectedReference] = useState<ProcessedSentence | null>(null);
+  const [fileName, setFileName] = useState<string>("");
 
-  const handleViewInPDFClick = (reference: ProcessedSentence) => {
-    if (!reference.fileId || typeof reference.pageNumber !== 'number') {
-      console.error('File ID or Page Number is missing for this reference.');
-      return;
-    }
-
-    const fileData = files.find(f => f.id === reference.fileId);
-
-    if (fileData && fileData.blob) {
-      setPdfFileToView(fileData.blob);
-      setPdfPageToView(reference.pageNumber);
-      setShowPDFModal(true);
+  const handleViewInfoClick = (reference: ProcessedSentence) => {
+    setSelectedReference(reference);
+    
+    // 獲取檔案名稱（如果有）
+    if (reference.fileId) {
+      const fileData = files.find(f => f.id === reference.fileId);
+      if (fileData) {
+        setFileName(fileData.name || '未知檔案');
+      } else {
+        setFileName('未知檔案');
+      }
     } else {
-      console.error('PDF file data or blob not found for this reference.');
+      setFileName('未知檔案');
     }
+    
+    setShowInfoModal(true);
   };
   
   const getTypeLabel = (type: string) => {
@@ -46,7 +46,7 @@ const ReferencesPanel: React.FC = () => {
     }
   };
   
-  if (selectedReferences.length === 0 && !showPDFModal) { 
+  if (selectedReferences.length === 0 && !showInfoModal) { 
     return (
       <div className="p-4 text-center text-gray-500">
         <p>尚未選擇任何引用句子</p>
@@ -72,9 +72,9 @@ const ReferencesPanel: React.FC = () => {
               
               <button
                 className="text-xs text-blue-600 hover:text-blue-800"
-                onClick={() => handleViewInPDFClick(reference)} 
+                onClick={() => handleViewInfoClick(reference)} 
               >
-                在 PDF 中查看
+                查看詳細資訊
               </button>
             </div>
             
@@ -90,24 +90,52 @@ const ReferencesPanel: React.FC = () => {
         ))}
       </div>
 
-      {showPDFModal && pdfFileToView && (
+      {showInfoModal && selectedReference && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl h-[90vh] flex flex-col">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg flex flex-col">
             <div className="flex justify-between items-center p-4 border-b">
-              <h4 className="text-lg font-medium">PDF 預覽</h4>
+              <h4 className="text-lg font-medium flex items-center">
+                <DocumentTextIcon className="h-5 w-5 mr-2 text-gray-600" />
+                文件資訊
+              </h4>
               <button 
-                onClick={() => setShowPDFModal(false)} 
+                onClick={() => setShowInfoModal(false)} 
                 className="text-gray-500 hover:text-gray-700"
               >
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
-            <div className="flex-grow overflow-hidden">
-              <PDFViewer 
-                file={pdfFileToView} 
-                pageNumber={pdfPageToView} 
-                onDocumentLoadError={(err) => console.error('PDF Load Error in Modal:', err)}
-              />
+            <div className="p-6">
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">檔案名稱</p>
+                  <p className="mt-1">{fileName}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-500">頁碼</p>
+                  <p className="mt-1">{typeof selectedReference.pageNumber === 'number' ? selectedReference.pageNumber : '未知'}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-500">類型</p>
+                  <p className="mt-1">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getTypeColor(selectedReference.type)}`}>
+                      {getTypeLabel(selectedReference.type)}
+                    </span>
+                  </p>
+                </div>
+              </div>
+              
+              <div className="mb-4">
+                <p className="text-sm font-medium text-gray-500">句子內容</p>
+                <p className="mt-1 p-3 bg-gray-50 rounded-md">{selectedReference.content}</p>
+              </div>
+              
+              {selectedReference.reason && (
+                <div>
+                  <p className="text-sm font-medium text-gray-500">分類原因</p>
+                  <p className="mt-1 p-3 bg-gray-50 rounded-md italic">{selectedReference.reason}</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
