@@ -24,12 +24,22 @@ export class SplitSentencesAPI {
         formData,
         {
           headers: {
+            'accept': 'application/json',
             'Content-Type': 'multipart/form-data'
           }
         }
       );
 
-      return response.data.sentences;
+      // 處理不同的響應格式
+      if (response.data.data && response.data.data.sentences) {
+        // 如果響應包含 data.sentences 格式
+        return response.data.data.sentences;
+      } else if (response.data.sentences) {
+        // 如果響應直接包含 sentences 格式
+        return response.data.sentences;
+      } else {
+        throw new Error('Invalid API response format: sentences not found');
+      }
     } catch (error) {
       console.error('Split sentences API error:', error);
       
