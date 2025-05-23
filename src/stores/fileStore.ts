@@ -39,10 +39,16 @@ export const useFileStore = create<FileState>()(
           )
         })),
         
-        removeFile: (id) => set((state) => ({
-          files: state.files.filter(file => file.id !== id),
-          currentFileId: state.currentFileId === id ? null : state.currentFileId
-        })),
+        removeFile: (id) => set((state) => {
+          // 從 sentences 中移除與文件相關的句子
+          const updatedSentences = state.sentences.filter(sentence => sentence.fileId !== id);
+          
+          return {
+            files: state.files.filter(file => file.id !== id),
+            currentFileId: state.currentFileId === id ? null : state.currentFileId,
+            sentences: updatedSentences
+          };
+        }),
         
         setCurrentFile: (id) => set({
           currentFileId: id
