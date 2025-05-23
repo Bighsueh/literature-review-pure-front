@@ -16,8 +16,18 @@ export class N8nAPI {
    */
   async checkOdCd(sentence: string): Promise<N8nOdCdResponse> {
     try {
+      // 使用四個 worker 中的其中一個處理請求
+      const workerEndpoints = API_CONFIG.n8n.endpoints.checkOdCdWorkers;
+      
+      // 選擇一個 worker (簡單的載均平衡方式，可以根據句子內容長度或隨機選擇)
+      // 這裡使用句子長度模 4 來選擇 worker
+      const workerIndex = sentence.length % workerEndpoints.length;
+      const selectedWorker = workerEndpoints[workerIndex];
+      
+      console.log(`Using worker ${workerIndex + 1} for sentence with length ${sentence.length}`);
+      
       const response = await this.client.post<N8nOdCdResponse>(
-        API_CONFIG.n8n.endpoints.checkOdCd,
+        selectedWorker,
         { sentence }
       );
       
@@ -84,9 +94,18 @@ export class N8nAPI {
     "query": string;
   }): Promise<N8nOrganizeResponse[]> {
     try {
+      console.log('Sending organize request with data:', JSON.stringify(data, null, 2));
+      
+      // 確保所有字段均為字符串類型
+      const requestData = {
+        "operational definition": data["operational definition"],
+        "conceptual definition": data["conceptual definition"],
+        "query": data.query
+      };
+      
       const response = await this.client.post<N8nOrganizeResponse[]>(
         API_CONFIG.n8n.endpoints.organizeResponse,
-        data
+        requestData
       );
       
       return response.data;
