@@ -3,19 +3,37 @@ import { useChatStore } from '../../../stores/chatStore';
 import { useAppStore } from '../../../stores/appStore';
 import MessageBubble from '../MessageBubble/MessageBubble';
 import { ProcessedSentence } from '../../../types/file';
+import { Message } from '../../../types/chat';
+import { ComputerDesktopIcon } from '@heroicons/react/24/outline';
 
 interface ChatMessageListProps {
   onReferenceClick?: (sentence: ProcessedSentence) => void;
 }
 
 const ChatMessageList: React.FC<ChatMessageListProps> = ({ onReferenceClick }) => {
+  // 直接使用 store hook，不使用選擇器函數
   const { conversations, currentConversationId } = useChatStore();
   const { setSelectedReferences } = useAppStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
+  // 取得當前對話
   const currentConversation = currentConversationId 
     ? conversations.find(conv => conv.id === currentConversationId) 
     : null;
+  
+  // 打印調試信息
+  useEffect(() => {
+    if (currentConversation) {
+      console.log('Current conversation ID:', currentConversationId);
+      console.log('Current conversation:', currentConversation);
+      console.log('Messages count:', currentConversation.messages.length);
+      console.log('Messages:', currentConversation.messages);
+    } else {
+      console.log('No current conversation found');
+      console.log('All conversations:', conversations);
+      console.log('Current conversation ID:', currentConversationId);
+    }
+  }, [currentConversation, conversations, currentConversationId]);
   
   // 自動滾動到最新訊息
   useEffect(() => {
@@ -38,34 +56,69 @@ const ChatMessageList: React.FC<ChatMessageListProps> = ({ onReferenceClick }) =
     onReferenceClick?.(reference);
   };
 
-  if (!currentConversation) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full bg-gray-50 text-gray-500">
-        <p>開始新對話</p>
-        <p className="text-sm mt-2">上傳檔案並輸入查詢</p>
-      </div>
-    );
-  }
+  // 创建默認的歡迎消息
+  const createWelcomeMessage = (): Message => ({
+    id: 'welcome',
+    type: 'system',
+    content: '歡迎使用定義查詢助手！\n\n我可以幫助您在學術論文中查找定義。使用方法：\n1. 首先上傳您的 PDF 論文\n2. 等待檔案處理完成\n3. 在下方輸入框中輸入您的查詢，例如："什麼是技術接受模型？"',
+    timestamp: new Date()
+  });
+
+  // 編譯歡迎消息 - 給所有對話均顯示
+  const welcomeMessage = createWelcomeMessage();
+
+  // 使用可視化的調試信息
+  const debugInfo = process.env.NODE_ENV === 'development' ? (
+    <div className="bg-yellow-100 p-2 text-xs rounded mb-2">
+      <div>Conversation ID: {currentConversationId || 'None'}</div>
+      <div>Messages count: {currentConversation ? currentConversation.messages.length : 0}</div>
+    </div>
+  ) : null;
   
-  if (currentConversation.messages.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full bg-gray-50 text-gray-500">
-        <p>尚無訊息</p>
-        <p className="text-sm mt-2">輸入查詢以開始對話</p>
-      </div>
-    );
-  }
+  // 格式化時間戳
+  const formatTimestamp = (date: Date) => {
+    return new Date(date).toLocaleTimeString('zh-TW', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
 
   return (
     <div className="flex flex-col h-full p-4 overflow-y-auto bg-gray-50">
-      {currentConversation.messages.map((message, index) => (
-        <MessageBubble
-          key={message.id}
-          message={message}
-          isLatest={index === currentConversation.messages.length - 1}
-          onReferenceClick={(refId) => handleMessageReferenceClick(message.id, refId)}
-        />
-      ))}
+      {debugInfo}
+      
+      {/* 歡迎消息始終顯示在頂部 */}
+      <div className="flex justify-start mb-4">
+        <div className="flex max-w-[80%]">
+          <div className="flex-shrink-0 mr-2">
+            <div className="h-8 w-8 rounded-full flex items-center justify-center bg-gray-200">
+              <ComputerDesktopIcon className="h-5 w-5 text-gray-600" />
+            </div>
+          </div>
+          <div className="rounded-lg px-4 py-2 shadow-sm bg-white text-gray-800 rounded-tl-none border border-gray-200">
+            <p className="whitespace-pre-wrap">{welcomeMessage.content}</p>
+            <div className="text-xs mt-1 flex justify-between items-center text-gray-500">
+              <span>{formatTimestamp(welcomeMessage.timestamp)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* 用戶對話或提示文本 */}
+      {currentConversation && currentConversation.messages.length > 0 ? (
+        currentConversation.messages.map((message) => (
+          <MessageBubble
+            key={message.id}
+            message={message}
+            onReferenceClick={(refId) => handleMessageReferenceClick(message.id, refId)}
+          />
+        ))
+      ) : (
+        <div className="text-center text-gray-500 my-4 mt-2 border-t pt-4">
+          開始新對話，請在下方輸入框中輸入您的查詢
+        </div>
+      )}
+      
       <div ref={messagesEndRef} />
     </div>
   );

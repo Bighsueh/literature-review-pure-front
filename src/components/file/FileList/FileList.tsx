@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   DocumentTextIcon,
   CheckCircleIcon,
   ExclamationCircleIcon,
-  ArrowPathIcon
+  ArrowPathIcon,
+  TrashIcon
 } from '@heroicons/react/24/outline';
 import { useFileStore } from '../../../stores/fileStore';
 import ProgressBar from '../../common/ProgressBar/ProgressBar';
@@ -14,11 +15,29 @@ interface FileListProps {
 }
 
 const FileList: React.FC<FileListProps> = ({ onFileSelect }) => {
-  const { files, currentFileId, setCurrentFile } = useFileStore();
+  const { files, currentFileId, setCurrentFile, removeFile } = useFileStore();
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   
   const handleFileClick = (fileId: string) => {
     setCurrentFile(fileId);
     onFileSelect?.(fileId);
+  };
+  
+  // 处理删除文件
+  const handleDeleteClick = (e: React.MouseEvent, fileId: string) => {
+    e.stopPropagation(); // 防止触发文件选择
+    setDeleteConfirmId(fileId);
+  };
+  
+  const confirmDelete = (e: React.MouseEvent, fileId: string) => {
+    e.stopPropagation();
+    removeFile(fileId);
+    setDeleteConfirmId(null);
+  };
+  
+  const cancelDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDeleteConfirmId(null);
   };
   
   const formatFileSize = (bytes: number): string => {
@@ -80,9 +99,39 @@ const FileList: React.FC<FileListProps> = ({ onFileSelect }) => {
                 {renderFileStatusIcon(file)}
               </div>
               <div className="ml-3 flex-1 overflow-hidden">
-                <p className="text-sm font-medium text-gray-900 truncate">
-                  {file.name}
-                </p>
+                <div className="flex justify-between items-start">
+                  <p className="text-sm font-medium text-gray-900 truncate">
+                    {file.name}
+                  </p>
+                  
+                  {deleteConfirmId === file.id ? (
+                    <div 
+                      className="flex items-center space-x-1 text-xs" 
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button 
+                        className="text-red-500 hover:text-red-700"
+                        onClick={(e) => confirmDelete(e, file.id)}
+                      >
+                        確認
+                      </button>
+                      <button 
+                        className="text-gray-500 hover:text-gray-700"
+                        onClick={cancelDelete}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  ) : (
+                    <button 
+                      className="text-gray-400 hover:text-red-500 p-1"
+                      onClick={(e) => handleDeleteClick(e, file.id)}
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                
                 <div className="flex items-center text-xs text-gray-500">
                   <span>{formatFileSize(file.size)}</span>
                   <span className="mx-1">•</span>

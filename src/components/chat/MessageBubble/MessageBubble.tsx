@@ -5,13 +5,11 @@ import { ComputerDesktopIcon } from '@heroicons/react/24/outline';
 
 interface MessageBubbleProps {
   message: Message;
-  isLatest?: boolean;
   onReferenceClick?: (referenceId: string) => void;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
   message,
-  isLatest = false,
   onReferenceClick
 }) => {
   const formatTimestamp = (date: Date) => {
@@ -55,18 +53,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     return <p className="whitespace-pre-wrap">{result}</p>;
   };
 
+  // 添加日誌以協助調試
+  console.log('Rendering message bubble for:', message);
+
   return (
     <div className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'} mb-4`}>
-      <div className={`
-        flex max-w-[80%]
-        ${message.type === 'user' ? 'flex-row-reverse' : ''}
-      `}>
-        {/* Avatar */}
+      <div className={`flex max-w-[80%] ${message.type === 'user' ? 'flex-row-reverse' : ''}`}>
         <div className={`flex-shrink-0 ${message.type === 'user' ? 'ml-2' : 'mr-2'}`}>
-          <div className={`
-            h-8 w-8 rounded-full flex items-center justify-center
-            ${message.type === 'user' ? 'bg-blue-500' : 'bg-gray-200'}
-          `}>
+          <div className={`h-8 w-8 rounded-full flex items-center justify-center ${message.type === 'user' ? 'bg-blue-500' : 'bg-gray-200'}`}>
             {message.type === 'user' 
               ? <UserIcon className="h-5 w-5 text-white" />
               : <ComputerDesktopIcon className="h-5 w-5 text-gray-600" />
@@ -74,21 +68,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           </div>
         </div>
         
-        {/* Message content */}
-        <div className={`
-          rounded-lg px-4 py-2 shadow-sm
-          ${message.type === 'user' 
-            ? 'bg-blue-500 text-white rounded-tr-none' 
-            : 'bg-white text-gray-800 rounded-tl-none border border-gray-200'
-          }
-        `}>
+        <div className={`rounded-lg px-4 py-2 shadow-sm ${message.type === 'user' ? 'bg-blue-500 text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none border border-gray-200'}`}>
           {renderContentWithReferences()}
           
-          {/* Metadata */}
-          <div className={`
-            text-xs mt-1 flex justify-between items-center
-            ${message.type === 'user' ? 'text-blue-200' : 'text-gray-500'}
-          `}>
+          <div className={`text-xs mt-1 flex justify-between items-center ${message.type === 'user' ? 'text-blue-200' : 'text-gray-500'}`}>
             <span>{formatTimestamp(message.timestamp)}</span>
             
             {message.metadata?.keywords && message.type === 'system' && (
@@ -105,13 +88,18 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             )}
           </div>
           
-          {/* References count */}
           {message.references && message.references.length > 0 && (
-            <div className={`
-              text-xs mt-1
-              ${message.type === 'user' ? 'text-blue-200' : 'text-gray-500'}
-            `}>
+            <div className={`text-xs mt-1 ${message.type === 'user' ? 'text-blue-200' : 'text-gray-500'}`}>
               <span>基於 {message.references.length} 個引用</span>
+              {message.references.map(ref => (
+                <button
+                  key={ref.id}
+                  onClick={() => onReferenceClick?.(ref.id)}
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 mx-1 hover:bg-blue-200 ml-2"
+                >
+                  引用 #{ref.id.substring(0, 4)}
+                </button>
+              ))}
             </div>
           )}
         </div>

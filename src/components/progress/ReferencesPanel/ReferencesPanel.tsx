@@ -1,12 +1,34 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAppStore } from '../../../stores/appStore';
+import { useFileStore } from '../../../stores/fileStore'; 
+import PDFViewer from '../../common/PDFViewer'; 
+import { ProcessedSentence } from '../../../types/file'; 
+import { XMarkIcon } from '@heroicons/react/24/outline'; 
 
-interface ReferencesPanelProps {
-  onViewInPDF?: (sentenceId: string) => void;
-}
-
-const ReferencesPanel: React.FC<ReferencesPanelProps> = ({ onViewInPDF }) => {
+const ReferencesPanel: React.FC = () => {
   const { selectedReferences } = useAppStore();
+  const { files } = useFileStore(); 
+
+  const [showPDFModal, setShowPDFModal] = useState(false);
+  const [pdfFileToView, setPdfFileToView] = useState<File | Blob | null>(null);
+  const [pdfPageToView, setPdfPageToView] = useState<number | undefined>(undefined);
+
+  const handleViewInPDFClick = (reference: ProcessedSentence) => {
+    if (!reference.fileId || typeof reference.pageNumber !== 'number') {
+      console.error('File ID or Page Number is missing for this reference.');
+      return;
+    }
+
+    const fileData = files.find(f => f.id === reference.fileId);
+
+    if (fileData && fileData.blob) {
+      setPdfFileToView(fileData.blob);
+      setPdfPageToView(reference.pageNumber);
+      setShowPDFModal(true);
+    } else {
+      console.error('PDF file data or blob not found for this reference.');
+    }
+  };
   
   const getTypeLabel = (type: string) => {
     switch (type) {
@@ -24,7 +46,7 @@ const ReferencesPanel: React.FC<ReferencesPanelProps> = ({ onViewInPDF }) => {
     }
   };
   
-  if (selectedReferences.length === 0) {
+  if (selectedReferences.length === 0 && !showPDFModal) { 
     return (
       <div className="p-4 text-center text-gray-500">
         <p>尚未選擇任何引用句子</p>
@@ -34,7 +56,7 @@ const ReferencesPanel: React.FC<ReferencesPanelProps> = ({ onViewInPDF }) => {
   }
 
   return (
-    <div className="overflow-y-auto">
+    <div className="overflow-y-auto h-full"> 
       <div className="p-4">
         <h3 className="text-lg font-medium text-gray-900 mb-4">引用原文</h3>
         
@@ -50,7 +72,7 @@ const ReferencesPanel: React.FC<ReferencesPanelProps> = ({ onViewInPDF }) => {
               
               <button
                 className="text-xs text-blue-600 hover:text-blue-800"
-                onClick={() => onViewInPDF?.(reference.id)}
+                onClick={() => handleViewInPDFClick(reference)} 
               >
                 在 PDF 中查看
               </button>
@@ -67,6 +89,29 @@ const ReferencesPanel: React.FC<ReferencesPanelProps> = ({ onViewInPDF }) => {
           </div>
         ))}
       </div>
+
+      {showPDFModal && pdfFileToView && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center p-4 border-b">
+              <h4 className="text-lg font-medium">PDF 預覽</h4>
+              <button 
+                onClick={() => setShowPDFModal(false)} 
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+            <div className="flex-grow overflow-hidden">
+              <PDFViewer 
+                file={pdfFileToView} 
+                pageNumber={pdfPageToView} 
+                onDocumentLoadError={(err) => console.error('PDF Load Error in Modal:', err)}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

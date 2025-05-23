@@ -1,20 +1,14 @@
-import React, { useState } from 'react';
+import React from 'react';
 import ProgressDisplay from './progress/ProgressDisplay/ProgressDisplay';
 import ReferencesPanel from './progress/ReferencesPanel/ReferencesPanel';
-import { useAppStore } from '../stores/appStore';
 
 interface RightPanelProps {
   onResize?: (newWidth: number) => void;
-  onViewInPDF?: (sentenceId: string) => void;
 }
 
-const RightPanel: React.FC<RightPanelProps> = ({ onResize, onViewInPDF }) => {
-  const [isResizing, setIsResizing] = useState(false);
-  const { progress } = useAppStore();
-  
+const RightPanel: React.FC<RightPanelProps> = ({ onResize }) => {
   const handleResizeStart = (e: React.MouseEvent) => {
     e.preventDefault();
-    setIsResizing(true);
     
     const handleResizeMove = (moveEvent: MouseEvent) => {
       if (onResize) {
@@ -25,7 +19,6 @@ const RightPanel: React.FC<RightPanelProps> = ({ onResize, onViewInPDF }) => {
     };
     
     const handleResizeEnd = () => {
-      setIsResizing(false);
       document.removeEventListener('mousemove', handleResizeMove);
       document.removeEventListener('mouseup', handleResizeEnd);
     };
@@ -47,7 +40,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ onResize, onViewInPDF }) => {
       
       {/* 引用面板 */}
       <div className="flex-1 overflow-hidden">
-        <ReferencesPanel onViewInPDF={onViewInPDF} />
+        <ReferencesPanel />
       </div>
       
       {/* Resize handle */}
