@@ -7,6 +7,7 @@ import { splitSentencesAPI } from '../services/splitSentencesAPI';
 import { n8nAPI } from '../services/n8nAPI';
 import { localStorageService } from '../services/localStorageService';
 import { FileData, ProcessedSentence } from '../types/file';
+import { SentenceWithPage } from '../types/api';
 
 export const useFileProcessor = () => {
   const { setProgress } = useAppStore();
@@ -66,12 +67,19 @@ export const useFileProcessor = () => {
         const sentence = sentences[i];
         const progress = 20 + (i / sentences.length) * 70;
         
+        // 確保 currentSentence 是字符串類型
+        const sentenceText = typeof sentence === 'string' 
+          ? sentence 
+          : typeof sentence === 'object' && sentence && 'sentence' in sentence 
+            ? (sentence as SentenceWithPage).sentence 
+            : JSON.stringify(sentence);
+
         setProgress({ 
           currentStage: 'analyzing', 
           percentage: progress, 
           details: {
             message: `分析第 ${i+1}/${sentences.length} 個句子`,
-            currentSentence: sentence,
+            currentSentence: sentenceText,
             processed: i + 1,
             total: sentences.length
           },
