@@ -3,13 +3,8 @@ import { useState, useCallback, useEffect } from 'react';
 import * as pdfjs from 'pdfjs-dist';
 import { TextPosition } from '../types/file';
 
-// 已移除未使用的 PDFMetadata 接口
-
-// Ensure PDF.js worker is configured
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.mjs',
-  import.meta.url
-).toString();
+// Ensure PDF.js worker is configured consistently
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.js';
 
 interface PDFDocumentInfo {
   numPages: number;
@@ -28,22 +23,22 @@ export const usePDFViewer = () => {
   /**
    * 載入 PDF 檔案
    */
-  const loadPDF = useCallback(async (fileOrUrl: File | string) => {
+  const loadPDF = useCallback(async (fileOrUrl: File | Blob | string) => {
     setIsLoading(true);
     setError(null);
     
     try {
       let loadingTask;
       
-      if (fileOrUrl instanceof File) {
-        // 從 File 對象加載 PDF
+      if (fileOrUrl instanceof File || fileOrUrl instanceof Blob) {
+        // 從 File 或 Blob 對象加載 PDF
         const arrayBuffer = await fileOrUrl.arrayBuffer();
         loadingTask = pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) });
       } else if (typeof fileOrUrl === 'string') {
         // 從 URL 字符串加載 PDF
         loadingTask = pdfjs.getDocument({ url: fileOrUrl });
       } else {
-        throw new Error('Invalid input: expected File object or URL string');
+        throw new Error('Invalid input: expected File object, Blob object, or URL string');
       }
       
       const pdf = await loadingTask.promise;
