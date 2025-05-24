@@ -7,8 +7,6 @@ import { splitSentencesAPI } from '../services/splitSentencesAPI';
 import { n8nAPI } from '../services/n8nAPI';
 import { localStorageService } from '../services/localStorageService';
 import { FileData, ProcessedSentence } from '../types/file';
-// SentenceWithPage 用於處理來自 splitSentencesAPI 的回傳值
-import { SentenceWithPage } from '../types/api';
 
 export const useFileProcessor = () => {
   const { setProgress } = useAppStore();
@@ -54,7 +52,7 @@ export const useFileProcessor = () => {
         uploadedAt: new Date()
       });
       
-      // 階段 2: 逐句分析 OD/CD
+      // 階段 2: 批次分析 OD/CD
       setProgress({ 
         currentStage: 'analyzing', 
         percentage: 20, 
@@ -62,103 +60,100 @@ export const useFileProcessor = () => {
         isProcessing: true
       });
       
+      // 準備處理的句子
       const processedSentences: ProcessedSentence[] = [];
-      
-      for (let i = 0; i < sentencesWithPage.length; i++) {
-        const sentenceObj = sentencesWithPage[i];
-        const progress = 20 + (i / sentencesWithPage.length) * 70;
-        
-        // 取得句子文本
-        const sentenceText = sentenceObj.sentence;
+      const sentenceTexts: string[] = sentencesWithPage.map(obj => obj.sentence);
 
-        setProgress({ 
-          currentStage: 'analyzing', 
-          percentage: progress, 
-          details: {
-            message: `分析第 ${i+1}/${sentencesWithPage.length} 個句子`,
-            currentSentence: sentenceText,
-            processed: i + 1,
-            total: sentencesWithPage.length
-          },
-          isProcessing: true
-        });
+      // 使用我們的批次處理方法
+      try {
+        // 定義進度回調函數
+        const onProgressUpdate = (processed: number, total: number, currentSentence?: string) => {
+          // 計算進度百分比 (20% 開始，70% 範圍內完成分析階段)
+          const progress = 20 + (processed / total) * 70;
+          
+          setProgress({ 
+            currentStage: 'analyzing', 
+            percentage: progress, 
+            details: {
+              message: `批次分析中: ${processed}/${total} 個句子`,
+              currentSentence,
+              processed,
+              total
+            },
+            isProcessing: true
+          });
+          
+          updateFile(fileId, { processingProgress: progress });
+        };
+
+        // 調用批次處理 API
+        const batchResults = await n8nAPI.checkOdCdBatch(sentenceTexts, onProgressUpdate);
         
-        updateFile(fileId, { processingProgress: progress });
-        
-        // 呼叫 n8n API 檢查句子類型，添加重試機制
-        let result;
-        let retryCount = 0;
-        let success = false;
-        
-        while (retryCount < 3 && !success) {
+        // 處理結果
+        batchResults.forEach((result, index) => {
+          const sentenceObj = sentencesWithPage[index];
+          const sentenceText = sentenceObj.sentence;
+          
           try {
-            // 只傳遞句子文本到 n8n API
-            result = await n8nAPI.checkOdCd(sentenceText);
-            
-            // 檢查 defining_type 是否存在
-            if (result && result.defining_type) {
-              success = true;
-            } else {
-              // 如果 defining_type 不存在，視為需要重試的錯誤
-              console.warn(`Retry ${retryCount + 1}: defining_type is undefined`, result);
-              retryCount++;
-              // 短暫延遲後重試
-              await new Promise(resolve => setTimeout(resolve, 1000));
+            // 檢查是否有錯誤
+            if ((result.result as any).error) {
+              console.error(`Error processing sentence: ${sentenceText.substring(0, 50)}...`, result.result);
+              
+              // 處理錯誤情況
+              const processedSentence: ProcessedSentence = {
+                id: uuidv4(),
+                content: sentenceText,
+                type: 'OTHER', // 預設為 OTHER
+                reason: '處理此句時發生錯誤: ' + (result.result.reason || '未知錯誤'),
+                fileId,
+                pageNumber: sentenceObj.page,
+                fileName: sentenceObj.fileName,
+                skipped: true
+              };
+              
+              processedSentences.push(processedSentence);
+              return; // 跳過此次迭代
             }
+            
+            // 正常處理句子
+            const processedSentence: ProcessedSentence = {
+              id: uuidv4(),
+              content: sentenceText,
+              type: result.result.defining_type?.toUpperCase() as 'OD' | 'CD' | 'OTHER',
+              reason: result.result.reason || '',
+              fileId,
+              pageNumber: sentenceObj.page,
+              fileName: sentenceObj.fileName
+            };
+            
+            processedSentences.push(processedSentence);
           } catch (error) {
-            console.warn(`Retry ${retryCount + 1} failed:`, error);
-            retryCount++;
-            // 短暫延遲後重試
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // 如果在處理過程中出現錯誤，使用預設值
+            console.error('Error processing batch result:', error);
+            const processedSentence: ProcessedSentence = {
+              id: uuidv4(),
+              content: sentenceText,
+              type: 'OTHER', // 預設為 OTHER
+              reason: '處理此句時發生錯誤',
+              fileId,
+              pageNumber: sentenceObj.page,
+              fileName: sentenceObj.fileName,
+              skipped: true
+            };
+            
+            processedSentences.push(processedSentence);
           }
-        }
+        });
+      } catch (error) {
+        console.error('Batch processing error:', error);
         
-        // 如果三次重試後仍然失敗，則跳過這筆資料
-        if (!success) {
-          console.error(`Skipping sentence after 3 retries: ${sentenceText.substring(0, 50) + '...'}`);
-          
-          // 使用預設值創建一個記錄，標記為 'OTHER'
+        // 如果批量處理失敗，為所有句子創建默認處理結果
+        sentencesWithPage.forEach(sentenceObj => {
           const processedSentence: ProcessedSentence = {
             id: uuidv4(),
-            content: sentenceText,
-            type: 'OTHER', // 預設為 OTHER
-            reason: '自動跳過：處理此句時發生錯誤',
-            fileId,
-            pageNumber: sentenceObj.page,
-            fileName: sentenceObj.fileName,
-            skipped: true // 添加標記表示此句被跳過
-          };
-          
-          processedSentences.push(processedSentence);
-          continue; // 跳到下一個句子
-        }
-        
-        // 正常處理句子
-        try {
-          // 確保 result 不是 undefined
-          if (!result) {
-            throw new Error('Result is undefined after successful check');
-          }
-          
-          const processedSentence: ProcessedSentence = {
-            id: uuidv4(),
-            content: sentenceText,
-            type: result.defining_type.toUpperCase() as 'OD' | 'CD' | 'OTHER',
-            reason: result.reason || '',
-            fileId,
-            pageNumber: sentenceObj.page,
-            fileName: sentenceObj.fileName
-          };
-          
-          processedSentences.push(processedSentence);
-        } catch (error) {
-          // 如果在處理過程中出現錯誤，使用預設值
-          console.error('Error processing sentence result:', error);
-          const processedSentence: ProcessedSentence = {
-            id: uuidv4(),
-            content: sentenceText,
-            type: 'OTHER', // 預設為 OTHER
-            reason: '處理此句時發生錯誤',
+            content: sentenceObj.sentence,
+            type: 'OTHER',
+            reason: '批量處理失敗：' + (error instanceof Error ? error.message : '未知錯誤'),
             fileId,
             pageNumber: sentenceObj.page,
             fileName: sentenceObj.fileName,
@@ -166,7 +161,7 @@ export const useFileProcessor = () => {
           };
           
           processedSentences.push(processedSentence);
-        }
+        });
       }
       
       // 階段 3: 儲存到 LocalStorage

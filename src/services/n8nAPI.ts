@@ -54,9 +54,13 @@ export class N8nAPI {
   /**
    * 批次檢查多個句子是否為 OD (操作型定義) 或 CD (概念型定義)，並平行處理
    * @param sentences 要檢查的句子陣列
+   * @param onProgress 進度回調函數，用於即時更新進度
    * @returns 檢查結果陣列，包含每個句子的類型和原因
    */
-  async checkOdCdBatch(sentences: string[]): Promise<{ sentence: string; result: N8nOdCdResponse }[]> {
+  async checkOdCdBatch(
+    sentences: string[], 
+    onProgress?: (processed: number, total: number, currentSentence?: string) => void
+  ): Promise<{ sentence: string; result: N8nOdCdResponse }[]> {
     if (!sentences || sentences.length === 0) {
       return [];
     }
@@ -67,6 +71,18 @@ export class N8nAPI {
     
     // 複製一份句子作為任務佇列
     const taskQueue = [...sentences];
+    const totalSentences = sentences.length;
+    let processedSentences = 0;
+    
+    // 更新進度的輔助函數
+    const updateProgress = (batch: number, currentSentence?: string) => {
+      if (onProgress) {
+        processedSentences += batch;
+        // 確保處理的句子數不超過總數
+        const processedCount = Math.min(processedSentences, totalSentences);
+        onProgress(processedCount, totalSentences, currentSentence);
+      }
+    };
     
     // 處理一批句子的函數
     const processNextBatch = async (): Promise<void> => {
@@ -86,9 +102,18 @@ export class N8nAPI {
         
         console.log(`批次處理：使用 worker ${workerIndex + 1} 處理句子 ${index + 1}/${batchTasks.length}`);
         
+        // 更新當前正在處理的句子
+        if (onProgress) {
+          onProgress(processedSentences, totalSentences, sentence);
+        }
+        
         // 返回處理此句子的 Promise
         return this.client.post<N8nOdCdResponse>(selectedWorker, { sentence })
           .then(response => {
+            // 單個句子處理完成後更新進度（個別更新）
+            if (onProgress) {
+              onProgress(processedSentences + 1, totalSentences, undefined);
+            }
             return { sentence, result: response.data };
           })
           .catch(error => {
@@ -142,6 +167,9 @@ export class N8nAPI {
           });
         }
       });
+      
+      // 更新整個批次的進度
+      updateProgress(batchTasks.length);
       
       // 處理下一批
       if (taskQueue.length > 0) {
