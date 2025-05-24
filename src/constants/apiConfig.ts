@@ -2,9 +2,9 @@
 
 // Determine the appropriate base URL for the API
 const getSplitSentencesBaseUrl = () => {
-  // When running in Docker, use the service name
+  // When running in production, use relative URL which will be handled by Nginx
   if (import.meta.env.PROD) {
-    return "http://split_sentences:8000";
+    return "";
   }
   // For local development
   return "http://localhost:8000";
