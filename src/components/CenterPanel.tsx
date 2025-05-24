@@ -12,11 +12,12 @@ interface CenterPanelProps {
 
 const CenterPanel: React.FC<CenterPanelProps> = ({ onReferenceClick }) => {
   const { sentences } = useFileStore();
-  const { resetStuckAssistantMessage } = useChatStore();
+  const { clearAllChats } = useChatStore();
   const hasFiles = sentences.length > 0;
 
   const handleRefresh = () => {
-    resetStuckAssistantMessage();
+    // 清除所有聊天記錄（從 localStorage 和界面上）
+    clearAllChats();
   };
 
   return (

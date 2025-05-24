@@ -12,7 +12,7 @@ interface ChatMessageListProps {
 
 const ChatMessageList: React.FC<ChatMessageListProps> = ({ onReferenceClick }) => {
   // 直接使用 store hook，不使用選擇器函數
-  const { conversations, currentConversationId } = useChatStore();
+  const { conversations, currentConversationId, updateConversation } = useChatStore();
   const { setSelectedReferences } = useAppStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
@@ -69,7 +69,7 @@ const ChatMessageList: React.FC<ChatMessageListProps> = ({ onReferenceClick }) =
 
   // 使用可視化的調試信息
   const debugInfo = process.env.NODE_ENV === 'development' ? (
-    <div className="bg-yellow-100 p-2 text-xs rounded mb-2">
+    <div className="hidden bg-yellow-100 p-2 text-xs rounded mb-2">
       <div>Conversation ID: {currentConversationId || 'None'}</div>
       <div>Messages count: {currentConversation ? currentConversation.messages.length : 0}</div>
     </div>
@@ -83,8 +83,28 @@ const ChatMessageList: React.FC<ChatMessageListProps> = ({ onReferenceClick }) =
     });
   };
 
+  const handleRefreshChat = () => {
+    if (currentConversationId) {
+      if (window.confirm('確定要清空當前對話記錄嗎？此操作無法復原。')) {
+        updateConversation(currentConversationId, { messages: [] });
+      }
+    }
+  };
+
   return (
-    <div className="flex flex-col h-full p-4 overflow-y-auto bg-gray-50">
+    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex justify-end mb-2">
+        <button
+          onClick={handleRefreshChat}
+          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-gray-700 bg-gray-100 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+          title="刷新聊天記錄"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-4 w-4 mr-1">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+          </svg>
+          刷新聊天記錄
+        </button>
+      </div>
       {debugInfo}
       
       {/* 歡迎消息始終顯示在頂部 */}

@@ -18,6 +18,7 @@ interface ChatState {
   updateMessage: (conversationId: string, messageId: string, updates: Partial<Message>) => void;
   removeMessage: (conversationId: string, messageId: string) => void;
   resetStuckAssistantMessage: () => void;
+  clearAllChats: () => void;
 }
 
 // Keywords to identify a stuck assistant message
@@ -115,6 +116,11 @@ export const useChatStore = create<ChatState>()(
             return { conversations: updatedConversations };
           }
           return {}; // No changes needed
+        }),
+
+        clearAllChats: () => set({
+          conversations: [],
+          currentConversationId: null
         }),
       }),
       { name: 'chat-storage' }
