@@ -1,7 +1,18 @@
 // constants/apiConfig.ts
+
+// Determine the appropriate base URL for the API
+const getSplitSentencesBaseUrl = () => {
+  // When running in Docker, use the service name
+  if (import.meta.env.PROD) {
+    return "http://split_sentences:8000";
+  }
+  // For local development
+  return "http://localhost:8000";
+};
+
 export const API_CONFIG = {
   splitSentences: {
-    baseUrl: "http://localhost:8000", // Docker 服務
+    baseUrl: getSplitSentencesBaseUrl(), // Dynamically set based on environment
     endpoint: "/api/process-pdf",
     method: "POST",
     contentType: "multipart/form-data"
