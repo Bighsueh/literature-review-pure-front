@@ -52,6 +52,110 @@ export class N8nAPI {
   }
 
   /**
+   * 批次檢查多個句子是否為 OD (操作型定義) 或 CD (概念型定義)，並平行處理
+   * @param sentences 要檢查的句子陣列
+   * @returns 檢查結果陣列，包含每個句子的類型和原因
+   */
+  async checkOdCdBatch(sentences: string[]): Promise<{ sentence: string; result: N8nOdCdResponse }[]> {
+    if (!sentences || sentences.length === 0) {
+      return [];
+    }
+
+    const workerEndpoints = API_CONFIG.n8n.endpoints.checkOdCdWorkers;
+    const results: { sentence: string; result: N8nOdCdResponse }[] = [];
+    const BATCH_SIZE = 10; // 一次最多處理 10 個請求
+    
+    // 複製一份句子作為任務佇列
+    const taskQueue = [...sentences];
+    
+    // 處理一批句子的函數
+    const processNextBatch = async (): Promise<void> => {
+      if (taskQueue.length === 0) {
+        return;
+      }
+      
+      // 取出下一批任務 (最多 BATCH_SIZE 個)
+      const batchTasks = taskQueue.splice(0, BATCH_SIZE);
+      console.log(`開始處理新的一批 ${batchTasks.length} 個句子`);
+      
+      // 創建當前批次的所有 Promise
+      const batchPromises = batchTasks.map((sentence, index) => {
+        // 為每個句子選擇一個 worker
+        const workerIndex = sentence.length % workerEndpoints.length;
+        const selectedWorker = workerEndpoints[workerIndex];
+        
+        console.log(`批次處理：使用 worker ${workerIndex + 1} 處理句子 ${index + 1}/${batchTasks.length}`);
+        
+        // 返回處理此句子的 Promise
+        return this.client.post<N8nOdCdResponse>(selectedWorker, { sentence })
+          .then(response => {
+            return { sentence, result: response.data };
+          })
+          .catch(error => {
+            console.error(`處理句子 "${sentence}" 時發生錯誤:`, error);
+            
+            let apiError: APIError;
+            if (axios.isAxiosError(error)) {
+              apiError = {
+                message: error.message,
+                code: error.code || 'UNKNOWN',
+                details: error.response?.data
+              };
+            } else {
+              apiError = {
+                message: 'Failed to check OD/CD',
+                code: 'UNKNOWN_ERROR'
+              } as APIError;
+            }
+            
+            // 返回錯誤信息和原始句子
+            return { 
+              sentence, 
+              result: {
+                type: 'error',
+                reason: apiError.message,
+                error: apiError
+              } as unknown as N8nOdCdResponse 
+            };
+          });
+      });
+      
+      // 等待當前批次的所有請求完成
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      // 處理結果
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          // Promise 被拒絕的情況，添加一個錯誤結果
+          const sentence = batchTasks[index];
+          console.error(`批次處理：句子 "${sentence}" 的 Promise 被拒絕:`, result.reason);
+          
+          results.push({
+            sentence,
+            result: {
+              type: 'error',
+              reason: '處理請求時發生未知錯誤',
+              error: { message: result.reason?.message || 'Unknown error', code: 'PROMISE_REJECTED' }
+            } as unknown as N8nOdCdResponse
+          });
+        }
+      });
+      
+      // 處理下一批
+      if (taskQueue.length > 0) {
+        await processNextBatch();
+      }
+    };
+    
+    // 開始處理第一批
+    await processNextBatch();
+    
+    return results;
+  }
+
+  /**
    * 從查詢中提取關鍵詞
    * @param query 使用者查詢
    * @returns 關鍵詞列表

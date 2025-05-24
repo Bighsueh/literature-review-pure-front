@@ -33,7 +33,7 @@ const CenterPanel: React.FC<CenterPanelProps> = ({ onReferenceClick }) => {
         </button>
       </div>
       
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-y-auto">
         <ChatMessageList onReferenceClick={onReferenceClick} />
       </div>
       
