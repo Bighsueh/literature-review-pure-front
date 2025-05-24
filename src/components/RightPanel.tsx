@@ -39,7 +39,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ onResize }) => {
       </div>
       
       {/* 引用面板 */}
-      <div className="flex-1 overflow-hidden">
+      <div className="hidden flex-1 overflow-hidden">
         <ReferencesPanel />
       </div>
       
