@@ -12,9 +12,9 @@ export class SplitSentencesAPI {
   /**
    * 將 PDF 檔案發送到分句服務進行處理
    * @param file PDF 檔案
-   * @returns 句子陣列
+   * @returns 句子對象陣列，包含頁碼和句子文本
    */
-  async processFile(file: File): Promise<string[]> {
+  async processFile(file: File): Promise<SentenceWithPage[]> {
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -31,16 +31,16 @@ export class SplitSentencesAPI {
       );
 
       // 處理不同的響應格式
-      let extractedSentences: string[] = [];
+      let extractedSentences: SentenceWithPage[] = [];
       
       if (response.data.data && response.data.data.sentences) {
         // 如果響應包含 data.sentences 格式
         const sentences = response.data.data.sentences;
-        extractedSentences = this.extractSentenceStrings(sentences);
+        extractedSentences = this.normalizeSentences(sentences, file.name);
       } else if (response.data.sentences) {
         // 如果響應直接包含 sentences 格式
         const sentences = response.data.sentences;
-        extractedSentences = this.extractSentenceStrings(sentences);
+        extractedSentences = this.normalizeSentences(sentences, file.name);
       } else {
         throw new Error('Invalid API response format: sentences not found');
       }
@@ -66,22 +66,30 @@ export class SplitSentencesAPI {
   }
 
   /**
-   * 從不同格式的數據中提取句子字符串
+   * 將不同格式的句子數據正規化為包含頁碼的句子對象
    * @param sentences 可能是字符串數組或帶頁碼的句子對象數組
-   * @returns 提取的純句子字符串數組
+   * @param fileName 檔案名稱
+   * @returns 正規化後的句子對象數組，包含頁碼和檔案名稱
    */
-  private extractSentenceStrings(sentences: string[] | SentenceWithPage[]): string[] {
+  private normalizeSentences(sentences: string[] | SentenceWithPage[], fileName: string): SentenceWithPage[] {
     if (sentences.length === 0) {
       return [];
     }
     
     // 檢查第一個元素來判斷數組類型
     if (typeof sentences[0] === 'string') {
-      // 如果是字符串數組，直接返回
-      return sentences as string[];
+      // 如果是字符串數組，轉換為對象數組，頁碼預設為1
+      return (sentences as string[]).map(sentence => ({
+        sentence,
+        page: 1,
+        fileName: fileName
+      }));
     } else {
-      // 如果是對象數組，提取 sentence 屬性
-      return (sentences as SentenceWithPage[]).map(item => item.sentence);
+      // 如果是對象數組，確保每個對象都有檔案名稱
+      return (sentences as SentenceWithPage[]).map(item => ({
+        ...item,
+        fileName: fileName
+      }));
     }
   }
 }
