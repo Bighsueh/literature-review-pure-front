@@ -1,14 +1,14 @@
 services:
-  # React frontend service
+  # React frontend service (production build)
   react:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: react-frontend
     ports:
-      - "3000:3000"
+      - "80:80"
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - VITE_API_URL=http://localhost:8000
     depends_on:
       - split_sentences
