@@ -24,6 +24,8 @@ export interface ProcessedSentence {
   fileId: string;
   pageNumber?: number;
   position?: TextPosition;
+  skipped?: boolean; // 標記是否因錯誤而被跳過
+  fileName?: string; // 檔案名稱
 }
 
 export interface TextPosition {

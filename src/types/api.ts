@@ -2,6 +2,7 @@
 export interface SentenceWithPage {
   sentence: string;
   page: number;
+  fileName?: string; // 添加檔案名稱屬性
 }
 
 export interface SplitSentencesResponse {
