@@ -4,6 +4,7 @@ import LeftPanel from './LeftPanel';
 import CenterPanel from './CenterPanel';
 import RightPanel from './RightPanel';
 import Modal from './common/Modal/Modal';
+import WelcomeTour from './onboarding/WelcomeTour';
 import { useFileStore } from '../stores/fileStore';
 import { ProcessedSentence } from '../types/file';
 
@@ -85,6 +86,9 @@ const MainLayout: React.FC = () => {
           onResize={handleRightPanelResize} 
         />
       </div>
+      
+      {/* Welcome Tour */}
+      <WelcomeTour />
       
       {/* Reference Info Modal */}
       {highlightedSentence && (
