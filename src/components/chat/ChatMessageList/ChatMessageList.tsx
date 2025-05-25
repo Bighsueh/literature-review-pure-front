@@ -60,7 +60,7 @@ const ChatMessageList: React.FC<ChatMessageListProps> = ({ onReferenceClick }) =
   const createWelcomeMessage = (): Message => ({
     id: 'welcome',
     type: 'system',
-    content: '歡迎使用定義查詢助手！\n\n我可以幫助您在學術論文中查找名詞定義。使用方法：\n1. 首先上傳您的論文 pdf 檔案\n2. 等待檔案處理完成\n3. 在下方輸入框中輸入您想要查詢的名詞，例如："What is Adaptive Expertise?"',
+    content: '歡迎使用定義查詢助手！\n\n我可以幫助您在學術論文中查找名詞定義。使用方法：\n1. 首先上傳您的英文論文 pdf 檔案\n2. 靜待檔案處理完成\n3. 在下方輸入框中輸入您想要查詢的名詞，例如："什麼是 Adaptive Expertise?"',
     timestamp: new Date()
   });
 
