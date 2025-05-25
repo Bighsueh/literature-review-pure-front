@@ -38,7 +38,6 @@ const LeftPanel: React.FC<LeftPanelProps> = ({ onResize }) => {
       </div>
       
       <div className="flex-1 overflow-hidden" id="file-upload-list">
-        123
         <FileList />
       </div>
       
