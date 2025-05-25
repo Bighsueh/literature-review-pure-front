@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import FileUploadZone from './file/FileUploadZone/FileUploadZone';
 import FileList from './file/FileList/FileList';
 
@@ -7,11 +7,8 @@ interface LeftPanelProps {
 }
 
 const LeftPanel: React.FC<LeftPanelProps> = ({ onResize }) => {
-  const [isResizing, setIsResizing] = useState(false);
-  
   const handleResizeStart = (e: React.MouseEvent) => {
     e.preventDefault();
-    setIsResizing(true);
     
     const handleResizeMove = (moveEvent: MouseEvent) => {
       if (onResize) {
@@ -22,7 +19,6 @@ const LeftPanel: React.FC<LeftPanelProps> = ({ onResize }) => {
     };
     
     const handleResizeEnd = () => {
-      setIsResizing(false);
       document.removeEventListener('mousemove', handleResizeMove);
       document.removeEventListener('mouseup', handleResizeEnd);
     };
@@ -41,7 +37,8 @@ const LeftPanel: React.FC<LeftPanelProps> = ({ onResize }) => {
         <FileUploadZone />
       </div>
       
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden" id="file-upload-list">
+        123
         <FileList />
       </div>
       

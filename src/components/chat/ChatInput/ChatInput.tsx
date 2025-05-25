@@ -58,7 +58,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <div className="border-t bg-white p-3">
+    <div id="chat-input" className="border-t bg-white p-3">
       <form onSubmit={handleSubmit} className="flex items-end">
         <textarea
           ref={inputRef}

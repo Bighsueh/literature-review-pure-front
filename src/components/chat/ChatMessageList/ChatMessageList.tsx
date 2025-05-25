@@ -60,7 +60,7 @@ const ChatMessageList: React.FC<ChatMessageListProps> = ({ onReferenceClick }) =
   const createWelcomeMessage = (): Message => ({
     id: 'welcome',
     type: 'system',
-    content: '歡迎使用定義查詢助手！\n\n我可以幫助您在學術論文中查找名詞定義。使用方法：\n1. 首先上傳您的英文論文 pdf 檔案\n2. 靜待檔案處理完成\n3. 在下方輸入框中輸入您想要查詢的名詞，例如："什麼是 Adaptive Expertise?"',
+    content: '🎉 歡迎使用定義查詢助手！\n\n我是您的學術論文定義查找助手，可以幫助您快速找到並理解論文中的重要概念。\n\n📋 使用步驟：\n1. 📄 首先上傳您的英文論文 PDF 檔案\n2. ⏱️ 在右側面板觀察檔案處理進度（通常需要 1-3 分鐘）\n3. 💬 處理完成後，在下方輸入框中輸入您想要查詢的名詞\n\n💡 查詢範例：\n• "什麼是 Adaptive Expertise?"\n• "Machine Learning 的定義是什麼？"\n• "請解釋 Deep Learning"\n\n🔍 系統會自動找到相關定義並提供詳細解釋，包含原文引用和上下文資訊。\n\n❓ 需要詳細教學嗎？點擊右下角的幫助按鈕開始引導！',
     timestamp: new Date()
   });
 
@@ -92,7 +92,7 @@ const ChatMessageList: React.FC<ChatMessageListProps> = ({ onReferenceClick }) =
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <div id="chat-messages" className="flex-1 overflow-y-auto p-4 space-y-4">
       <div className="flex justify-end mb-2">
         <button
           onClick={handleRefreshChat}

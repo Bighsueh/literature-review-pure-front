@@ -83,7 +83,7 @@ const FileList: React.FC<FileListProps> = ({ onFileSelect }) => {
   }
   
   return (
-    <div className="overflow-y-auto max-h-full">
+    <div id="file-list" className="overflow-y-auto max-h-full">
       <ul className="divide-y divide-gray-200">
         {files.map((file) => (
           <li 

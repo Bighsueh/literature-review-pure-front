@@ -28,13 +28,13 @@ const RightPanel: React.FC<RightPanelProps> = ({ onResize }) => {
   };
   
   return (
-    <div className="flex flex-col h-full relative">
+    <div id="references-panel" className="flex flex-col h-full relative">
       <div className="p-4 border-b">
         <h2 className="text-lg font-medium text-gray-900">處理進度 & 引用</h2>
       </div>
       
       {/* 進度顯示區域 */}
-      <div className="p-4">
+      <div id="progress-display" className="p-4">
         <ProgressDisplay />
       </div>
       
