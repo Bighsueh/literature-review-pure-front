@@ -65,7 +65,7 @@ export const useAppStore = create<AppState>()(
           progress: { ...state.progress, ...updates }
         })),
         
-        resetProgress: () => set((state) => ({
+        resetProgress: () => set(() => ({
           progress: {
             currentStage: 'idle',
             percentage: 0,

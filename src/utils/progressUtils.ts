@@ -30,7 +30,7 @@ export const getStageColor = (stage: ProcessingStage): string => {
 /**
  * 檔案處理進度模擬步驟
  */
-export const getFileProcessingSteps = (totalSentences: number): ProgressStep[] => [
+export const getFileProcessingSteps = (): ProgressStep[] => [
   { stage: 'uploading', percentage: 10, message: '正在上傳檔案...', delay: 1000 },
   { stage: 'analyzing', percentage: 20, message: '開始分析句子類型...', delay: 500 },
   { stage: 'saving', percentage: 95, message: '儲存處理結果...', delay: 1000 },
