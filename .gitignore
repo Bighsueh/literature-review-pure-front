@@ -24,6 +24,12 @@ dist-ssr
 *.sln
 *.sw?
 
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
 # Environment variables
 .env
 .env.local
@@ -40,3 +46,17 @@ dist-ssr
 
 # PDF worker
 /public/pdf.worker.js
+
+# Temporary files
+*.tmp
+*.temp
+
+# IDE files
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
