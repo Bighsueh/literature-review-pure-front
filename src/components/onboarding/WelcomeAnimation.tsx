@@ -101,14 +101,9 @@ const WelcomeAnimation: React.FC<WelcomeAnimationProps> = ({ onComplete }) => {
                   transition={{ duration: 0.4 }}
                 >
                   {/* Icon */}
-                  <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ delay: 0.2, type: "spring", stiffness: 200 }}
-                    className="text-6xl mb-6"
-                  >
+                  <div className="text-6xl mb-6">
                     {steps[currentStep].icon}
-                  </motion.div>
+                  </div>
 
                   {/* Title */}
                   <motion.h1
