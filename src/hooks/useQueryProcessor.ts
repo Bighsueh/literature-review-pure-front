@@ -119,11 +119,12 @@ export const useQueryProcessor = () => {
         isProcessing: true
       });
 
-      if (relevantSentences.length === 0) {
+      // 檢查是否有 OD 或 CD 類型的句子
+      if (odSentences.length === 0 && cdSentences.length === 0) {
         const noResultsMessage: Message = {
           id: uuidv4(),
           type: 'system',
-          content: '抱歉，根據您的查詢，在當前文件中找不到相關的定義。請嘗試不同的關鍵詞或上傳其他文件。',
+          content: '抱歉，根據您的查詢，在當前文件中找不到相關的操作型定義（OD）或概念型定義（CD）。請嘗試不同的關鍵詞或上傳其他文件。',
           timestamp: new Date(),
           metadata: { query: queryText, keywords, processingTime: (Date.now() - startTime) / 1000 }
         };
@@ -155,15 +156,18 @@ export const useQueryProcessor = () => {
         isProcessing: true
       });
 
+      // 只保留 OD 和 CD 類型的句子作為引用
+      const validReferences = [...odSentences, ...cdSentences];
+
       const systemMessage: Message = {
         id: uuidv4(),
         type: 'system',
         content: organizedContent,
-        references: relevantSentences,
+        references: validReferences,
         metadata: {
           query: queryText,
           keywords,
-          relevantSentencesCount: relevantSentences.length,
+          relevantSentencesCount: validReferences.length,
           processingTime: (Date.now() - startTime) / 1000,
         },
         timestamp: new Date()
@@ -177,7 +181,7 @@ export const useQueryProcessor = () => {
         details: '處理完成！',
         isProcessing: false
       });
-      setSelectedReferences(relevantSentences || []);
+      setSelectedReferences(validReferences || []);
 
     } catch (error) {
       console.error('Error in processQuery:', error);
