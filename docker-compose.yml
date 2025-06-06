@@ -35,7 +35,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=password
       - GROBID_URL=http://140.115.126.192:8070
-      - N8N_BASE_URL=${N8N_BASE_URL:-http://localhost:5678}
+      - N8N_BASE_URL=https://n8n.hsueh.tw
       - SPLIT_SENTENCES_URL=http://split_sentences:8000
     volumes:
       - ./backend:/app/backend
