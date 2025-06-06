@@ -227,20 +227,41 @@ class ProcessingService:
     
     async def _validate_file(self, file_id: str) -> Dict[str, Any]:
         """檔案驗證"""
-        file_info = await file_service.get_file_info(file_id)
+        # 直接從資料庫獲取檔案資訊
+        from ..core.database import AsyncSessionLocal
+        from sqlalchemy.ext.asyncio import AsyncSession
         
-        if not file_info:
-            raise ValueError(f"檔案不存在: {file_id}")
-        
-        if file_info.get("status") != "uploaded":
-            raise ValueError(f"檔案狀態不正確: {file_info.get('status')}")
-        
-        file_path = file_info.get("file_path")
-        if not os.path.exists(file_path):
-            raise ValueError(f"檔案實體不存在: {file_path}")
-        
-        logger.debug(f"檔案驗證通過: {file_id}")
-        return file_info
+        # 創建一個新的資料庫會話來獲取檔案資訊
+        async with AsyncSessionLocal() as db:
+            paper = await db_service.get_paper_by_id(db, file_id)
+            
+            if not paper:
+                raise ValueError(f"檔案不存在: {file_id}")
+            
+            # 檢查論文狀態
+            if paper.processing_status == "error":
+                raise ValueError(f"檔案狀態為錯誤: {paper.error_message}")
+            
+            # 構建檔案路徑（假設檔案存儲在暫存目錄中）
+            file_path = os.path.join(settings.temp_files_dir, paper.file_name)
+            
+            if not os.path.exists(file_path):
+                raise ValueError(f"檔案實體不存在: {file_path}")
+            
+            # 構建檔案資訊字典，與原 file_service 格式相容
+            file_info = {
+                "file_id": file_id,
+                "file_path": file_path,
+                "filename": paper.file_name,
+                "original_filename": paper.original_filename,
+                "file_size": paper.file_size,
+                "status": "uploaded" if paper.processing_status in ["uploading", "uploaded"] else paper.processing_status,
+                "created_time": paper.created_at,
+                "modified_time": paper.upload_timestamp
+            }
+            
+            logger.debug(f"檔案驗證通過: {file_id}")
+            return file_info
     
     async def _process_with_grobid(self, file_info: Dict[str, Any]) -> Dict[str, Any]:
         """使用 Grobid 處理檔案"""

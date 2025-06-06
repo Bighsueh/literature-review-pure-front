@@ -6,10 +6,13 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.database import get_db
 from ..services.processing_service import processing_service
 from ..services.queue_service import queue_service, TaskPriority, TaskStatus
 from ..services.file_service import file_service
+from ..services.db_service import db_service
 from ..core.logging import get_logger
 
 logger = get_logger("api_processing")
@@ -121,6 +124,51 @@ async def batch_process_files(request: BatchProcessRequest):
     except Exception as e:
         logger.error(f"批次處理失敗: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/start")
+async def start_processing_selected(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    開始處理所有已選取的論文
+    """
+    try:
+        selected_papers = await db_service.get_selected_papers(db)
+        if not selected_papers:
+            raise HTTPException(status_code=404, detail="沒有選取任何論文")
+
+        paper_ids = [paper.id for paper in selected_papers]
+        task_ids = []
+        
+        # 對每個選取的論文開始處理
+        for paper_id in paper_ids:
+            # 使用 ProcessingService.process_file 方法，傳入 file_id（即 paper_id）
+            task_id = await processing_service.process_file(
+                file_id=paper_id,
+                user_id=None,  # 可以根據需要傳入實際的用戶ID
+                priority=TaskPriority.NORMAL,
+                options={
+                    "extract_keywords": True,
+                    "detect_od_cd": True,
+                    "analyze_sections": True,
+                    "max_sentences_per_batch": 50
+                }
+            )
+            task_ids.append(task_id)
+        
+        return {
+            "success": True,
+            "message": f"已成功將 {len(paper_ids)} 篇論文加入處理佇列",
+            "paper_ids": paper_ids,
+            "task_ids": task_ids
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"開始處理失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"開始處理時發生內部錯誤: {e}")
 
 # ===== 狀態查詢端點 =====
 
