@@ -1,4 +1,71 @@
 services:
+  # PostgreSQL資料庫
+  postgres:
+    image: postgres:15
+    container_name: paper_analysis_db
+    environment:
+      POSTGRES_DB: paper_analysis
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  # FastAPI後端
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: paper_analysis_backend
+    ports:
+      - "8001:8000"  # 避免與split_sentences衝突
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=paper_analysis
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - GROBID_URL=http://140.115.126.192:8070
+      - N8N_BASE_URL=${N8N_BASE_URL:-http://localhost:5678}
+      - SPLIT_SENTENCES_URL=http://split_sentences:8000
+    volumes:
+      - ./backend:/app/backend
+      - ./temp_files:/app/temp_files
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # React前端 (開發模式)
+  react-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: react-frontend-dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - VITE_API_BASE_URL=http://localhost:8001/api
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
   # React frontend service (production build)
   react:
     build:
@@ -9,14 +76,14 @@ services:
       - "80:80"
     environment:
       - NODE_ENV=production
-      - VITE_API_URL=http://localhost:8000
+      - VITE_API_URL=http://localhost:8001
     depends_on:
-      - split_sentences
+      - backend
     restart: unless-stopped
     networks:
       - app-network
 
-  # Split Sentences API service
+  # Split Sentences API service (保留現有)
   split_sentences:
     build:
       context: ./split_sentences
@@ -37,6 +104,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    depends_on:
+      - redis
     networks:
       - app-network
 
@@ -53,6 +122,7 @@ services:
       - app-network
 
 volumes:
+  postgres_data:
   redis_data:
 
 networks:

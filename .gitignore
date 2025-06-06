@@ -60,3 +60,42 @@ dist-ssr
 # OS generated files
 Thumbs.db
 ehthumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Backend specific
+backend/__pycache__/
+backend/*/__pycache__/
+backend/*/*/__pycache__/
+
+# Split sentences service
+split_sentences/app/__pycache__/
+split_sentences/app/*/__pycache__/
+
+# Test files and temporary content
+test_*.py
+simple_test_*.py
+temp_files/
+*.pdf
+llm_output_example.json
+llm_prompt_template.md
+
+# Completion reports (generated documentation)
+*_COMPLETION_REPORT.md
+TECHNICAL_HIGHLIGHTS_*.md
+
+# Test scripts
+test_*.sh
