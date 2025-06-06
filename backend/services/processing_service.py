@@ -271,14 +271,12 @@ class ProcessingService:
         if not await grobid_service.health_check():
             raise Exception("Grobid 服務不可用")
         
-        # 處理 PDF 到 TEI XML
-        tei_result = await grobid_service.process_pdf_to_tei(file_path)
-        
-        if "error" in tei_result:
-            raise Exception(f"Grobid 處理失敗: {tei_result['error']}")
-        
         # 完整處理
         complete_result = await grobid_service.process_paper_complete(file_path)
+
+        if not complete_result.get("processing_success"):
+            error_msg = complete_result.get('error_message', '未知的 Grobid 處理錯誤')
+            raise Exception(f"Grobid 處理失敗: {error_msg}")
         
         logger.info(f"Grobid 處理完成，提取到 {len(complete_result.get('sections', []))} 個章節")
         return complete_result
@@ -452,10 +450,7 @@ class ProcessingService:
             if len(content.strip()) > 50:  # 只處理有足夠內容的章節
                 try:
                     result = await n8n_service.extract_keywords(
-                        text_content=content,
-                        content_type="section",
-                        max_keywords=10,
-                        language="auto"
+                        query=content,
                     )
                     
                     if "error" not in result and "keywords" in result:
