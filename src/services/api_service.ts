@@ -55,6 +55,16 @@ export interface QueryResponse {
   };
 }
 
+export interface UploadResponse {
+  paper_id: string;
+  message: string;
+  duplicate?: boolean;
+  filename?: string;
+  original_filename?: string;
+  file_size?: number;
+  file_hash?: string;
+}
+
 class ApiService {
   private readonly baseUrl: string;
   private readonly timeout: number = 30000; // 30 seconds
@@ -152,7 +162,7 @@ class ApiService {
   /**
    * 上傳 PDF 檔案
    */
-  async uploadFile(file: File): Promise<ApiResponse<{ file_id: string; message: string }>> {
+  async uploadFile(file: File): Promise<ApiResponse<UploadResponse>> {
     const formData = new FormData();
     formData.append('file', file);
 

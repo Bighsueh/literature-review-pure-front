@@ -70,7 +70,7 @@ class PaperService {
 
       // 2. 保存本地元資料
       const metadata: FileMetadata = {
-        id: uploadResult.data.file_id,
+        id: uploadResult.data.paper_id,
         name: file.name,
         size: file.size,
         type: file.type,
@@ -84,7 +84,7 @@ class PaperService {
 
       return {
         success: true,
-        file_id: uploadResult.data.file_id,
+        file_id: uploadResult.data.paper_id,
         message: uploadResult.data.message,
       };
     } catch (error) {
