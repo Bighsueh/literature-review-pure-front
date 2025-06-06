@@ -61,41 +61,50 @@ dist-ssr
 Thumbs.db
 ehthumbs.db
 
-# Python
+# Python cache files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Backend specific
-backend/__pycache__/
-backend/*/__pycache__/
-backend/*/*/__pycache__/
-
-# Split sentences service
-split_sentences/app/__pycache__/
-split_sentences/app/*/__pycache__/
-
-# Test files and temporary content
+# Testing files
 test_*.py
-simple_test_*.py
+*_test.py
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary directories
 temp_files/
-*.pdf
+tmp/
+
+# Development documentation and reports
+BACKLOG_*.md
+TECHNICAL_HIGHLIGHTS_*.md
+*_COMPLETION_REPORT.md
 llm_output_example.json
 llm_prompt_template.md
+simple_test_*.py
+test_enhanced_*.sh
+docs/test.pdf
 
-# Completion reports (generated documentation)
-*_COMPLETION_REPORT.md
-TECHNICAL_HIGHLIGHTS_*.md
-
-# Test scripts
-test_*.sh
+# FastAPI development
+*.db
+*.sqlite3
