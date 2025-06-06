@@ -8,7 +8,7 @@
 
 * **類型：** Webhook
 * **HTTP 方法：** `POST`
-* **路徑：** `/webhook/5fd2cefe-147a-490d-ada9-8849234c1580`
+* **路徑：** `/webhook/check-od-cd`
 
 **輸入 (Request Body - `application/x-www-form-urlencoded`)：**
 
@@ -35,7 +35,7 @@
 ```bash
 curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
   -d "sentence=Learning is acquiring new knowledge." \
-  https://n8n.hsueh.tw/webhook/5fd2cefe-147a-490d-ada9-8849234c1580
+  https://n8n.hsueh.tw/webhook/check-od-cd
 ```
 
 **範例回應：**
@@ -104,105 +104,222 @@ curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
 
 ---
 
-## 3. query intent classification (**新增**)
+## 3. intelligent section selection (**新增**)
 
-**描述：** 這個 workflow 接收一個查詢語句，並判斷其查詢意圖，決定是否為定義相關查詢。
+**描述：** 這個 workflow 接收查詢語句和所有可用論文的section摘要，智能選擇相關的sections並決定分析重點。
 
 **觸發方式：**
 
 * **類型：** Webhook  
 * **HTTP 方法：** `POST`
-* **路徑：** `/webhook/query-intent-classification` (**待建立**)
+* **路徑：** `/webhook/intelligent-section-selection` (**待建立**)
 
-**輸入 (Request Body - `application/x-www-form-urlencoded`)：**
+**輸入 (Request Body - `application/json`)：**
 
-| 欄位名稱  | 型別     | 描述                     | 是否必填 | 範例                        |
-| :-------- | :------- | :----------------------- | :------- | :-------------------------- |
-| `query`   | `string` | 需要分類意圖的查詢語句。   | 是       | `What is adaptive expertise?` or `How to measure learning outcomes?`    |
+```json
+{
+  "query": "string",
+  "available_papers": [
+    {
+      "file_name": "string",
+      "sections": [
+        {
+          "section_type": "string",
+          "page_num": "number",
+          "word_count": "number",
+          "brief_content": "string",
+          "od_count": "number",
+          "cd_count": "number", 
+          "total_sentences": "number"
+        }
+      ]
+    }
+  ]
+}
+```
+
+| 欄位名稱           | 型別             | 描述                                       | 範例                                         |
+| :----------------- | :--------------- | :----------------------------------------- | :------------------------------------------- |
+| `query`            | `string`         | 使用者查詢語句                              | `"Compare adaptive expertise definitions"`    |
+| `available_papers` | `array`          | 可用論文及其section摘要列表                  | 見上方JSON結構                               |
 
 **輸出 (Response Body - `application/json`)：**
 
 ```json
 {
-  "intent_type": "string",
-  "is_definition_related": "boolean",
-  "confidence": "number",
-  "suggested_keywords": ["string", "string", ...]
+  "selected_sections": [
+    {
+      "paper_name": "string",
+      "section_type": "string", 
+      "focus_type": "string",
+      "keywords": ["string"],
+      "selection_reason": "string"
+    }
+  ],
+  "analysis_focus": "string",
+  "suggested_approach": "string"
 }
 ```
 
-| 欄位名稱              | 型別             | 描述                                       | 範例                                         |
-| :-------------------- | :--------------- | :----------------------------------------- | :------------------------------------------- |
-| `intent_type`         | `string`         | 查詢意圖類型                               | `"definition"`, `"measurement"`, `"comparison"`, `"importance"` |
-| `is_definition_related` | `boolean`        | 是否為定義相關查詢                          | `true` or `false` |
-| `confidence`          | `number`         | 分類信心度 (0-1)                           | `0.85` |
-| `suggested_keywords`  | `array` of `string` | 建議關鍵詞                                 | `["expertise", "adaptive"]` |
+| 欄位名稱           | 型別             | 描述                                       | 範例                                         |
+| :----------------- | :--------------- | :----------------------------------------- | :------------------------------------------- |
+| `selected_sections` | `array`         | 選中的sections和分析方式                    | 見上方JSON結構                               |
+| `analysis_focus`   | `string`         | 分析重點 (`definitions`, `methods`, `results`, `comparison`) | `"definitions"`                 |
+| `suggested_approach` | `string`       | 建議的分析方式                              | `"Compare definitions across papers"`         |
 
 **範例呼叫：**
 
 ```bash
-curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "query=What is adaptive expertise?" \
-  https://n8n.hsueh.tw/webhook/query-intent-classification
+curl -X POST -H "Content-Type: application/json" \
+  -d '{
+    "query": "What are the key methods for measuring adaptive expertise?",
+    "available_papers": [
+      {
+        "file_name": "smith2023.pdf",
+        "sections": [
+          {
+            "section_type": "method",
+            "page_num": 5,
+            "word_count": 1200,
+            "brief_content": "We measured adaptive expertise using a problem-solving task...",
+            "od_count": 3,
+            "cd_count": 1,
+            "total_sentences": 45
+          }
+        ]
+      }
+    ]
+  }' \
+  https://n8n.hsueh.tw/webhook/intelligent-section-selection
 ```
 
 **範例回應：**
 
 ```json
 {
-  "intent_type": "definition",
-  "is_definition_related": true,
-  "confidence": 0.92,
-  "suggested_keywords": ["expertise", "adaptive", "adaptive expertise"]
+  "selected_sections": [
+    {
+      "paper_name": "smith2023.pdf",
+      "section_type": "method",
+      "focus_type": "key_sentences",
+      "keywords": ["measurement", "adaptive expertise", "assessment"],
+      "selection_reason": "Contains operational definitions and measurement approaches for adaptive expertise"
+    }
+  ],
+  "analysis_focus": "methods",
+  "suggested_approach": "Extract and compare measurement approaches across selected papers"
 }
 ```
 
 ---
 
-## 4. section suggestion (**新增**)
+## 4. unified content analysis (**新增**)
 
-**描述：** 這個 workflow 接收非定義相關的查詢，並建議應該搜尋哪些論文章節來找到答案。
+**描述：** 這個 workflow 接收查詢語句和LLM選中的section內容，進行統一的多論文內容分析，產生整合回應。
 
 **觸發方式：**
 
 * **類型：** Webhook
-* **HTTP 方法：** `POST`  
-* **路徑：** `/webhook/section-suggestion` (**待建立**)
+* **HTTP 方法：** `POST`
+* **路徑：** `/webhook/unified-content-analysis` (**待建立**)
 
-**輸入 (Request Body - `application/x-www-form-urlencoded`)：**
+**輸入 (Request Body - `application/json`)：**
 
-| 欄位名稱  | 型別     | 描述                     | 是否必填 | 範例                        |
-| :-------- | :------- | :----------------------- | :------- | :-------------------------- |
-| `query`   | `string` | 非定義相關的查詢語句。     | 是       | `How to measure learning effectiveness?`    |
+```json
+{
+  "query": "string",
+  "selected_content": [
+    {
+      "paper_name": "string",
+      "section_type": "string",
+      "content_type": "string",
+      "content": "object"
+    }
+  ],
+  "analysis_focus": "string"
+}
+```
+
+| 欄位名稱         | 型別     | 描述                                | 範例                                         |
+| :--------------- | :------- | :---------------------------------- | :------------------------------------------- |
+| `query`          | `string` | 原始查詢語句                         | `"How do different papers define adaptive expertise?"` |
+| `selected_content` | `array` | LLM選中的section內容                | 見上方JSON結構                               |
+| `analysis_focus` | `string` | 分析重點類型                         | `"definitions"`, `"methods"`, `"comparison"` |
 
 **輸出 (Response Body - `application/json`)：**
 
 ```json
 {
-  "suggested_sections": ["string", "string", ...],
-  "reasoning": "string"
+  "response": "string",
+  "references": [
+    {
+      "id": "string",
+      "paper_name": "string", 
+      "section_type": "string",
+      "page_num": "number",
+      "content_snippet": "string"
+    }
+  ],
+  "source_summary": {
+    "total_papers": "number",
+    "papers_used": ["string"],
+    "sections_analyzed": ["string"],
+    "analysis_type": "string"
+  }
 }
 ```
 
-| 欄位名稱              | 型別             | 描述                                       | 範例                                         |
-| :-------------------- | :--------------- | :----------------------------------------- | :------------------------------------------- |
-| `suggested_sections`  | `array` of `string` | 建議搜尋的章節列表                         | `["method", "results", "discussion"]` |
-| `reasoning`           | `string`         | 建議理由                                   | `"Measurement methods are typically described in methodology sections"` |
+| 欄位名稱        | 型別     | 描述                                   | 範例                                                        |
+| :-------------- | :------- | :------------------------------------- | :---------------------------------------------------------- |
+| `response`      | `string` | AI 整理後的回覆文本，包含 [[ref:id]] 標記 | `"根據多篇文獻分析 [[ref:abc123]]，adaptive expertise的定義..."` |
+| `references`    | `array`  | 引用來源列表                            | 見上方JSON結構 |
+| `source_summary`| `object` | 來源摘要資訊                            | `{"total_papers": 3, "analysis_type": "definition_comparison"}` |
 
 **範例呼叫：**
 
 ```bash
-curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "query=How to measure learning effectiveness?" \
-  https://n8n.hsueh.tw/webhook/section-suggestion
+curl -X POST -H "Content-Type: application/json" \
+  -d '{
+    "query": "How do different papers define adaptive expertise?",
+    "selected_content": [
+      {
+        "paper_name": "smith2023.pdf",
+        "section_type": "introduction",
+        "content_type": "definitions",
+        "content": [
+          {
+            "text": "Adaptive expertise is the ability to flexibly apply knowledge.",
+            "type": "CD",
+            "page_num": 2
+          }
+        ]
+      }
+    ],
+    "analysis_focus": "definitions"
+  }' \
+  https://n8n.hsueh.tw/webhook/unified-content-analysis
 ```
 
 **範例回應：**
 
 ```json
 {
-  "suggested_sections": ["method", "results", "discussion"],
-  "reasoning": "Measurement methods and their effectiveness are typically described in methodology, results, and discussion sections."
+  "response": "根據文獻分析，adaptive expertise 的定義呈現不同觀點 [[ref:smith2023_intro_2]]...",
+  "references": [
+    {
+      "id": "smith2023_intro_2",
+      "paper_name": "smith2023.pdf",
+      "section_type": "introduction", 
+      "page_num": 2,
+      "content_snippet": "Adaptive expertise is the ability to flexibly apply knowledge."
+    }
+  ],
+  "source_summary": {
+    "total_papers": 1,
+    "papers_used": ["smith2023.pdf"],
+    "sections_analyzed": ["introduction"],
+    "analysis_type": "definition_comparison"
+  }
 }
 ```
 
@@ -224,7 +341,7 @@ curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
 {
   "query": "string",
   "papers": [
-    {
+  {
       "file_name": "string",
       "operational_definitions": [
         {
@@ -238,8 +355,8 @@ curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
           "sentence": "string", 
           "section": "string",
           "page_num": "number"
-        }
-      ]
+  }
+]
     }
   ]
 }
@@ -259,7 +376,7 @@ curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
 {
   "response": "string",
   "references": [
-    {
+  {
       "id": "string",
       "file_name": "string", 
       "sentence": "string",
@@ -271,8 +388,8 @@ curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
   "source_summary": {
     "total_papers": "number",
     "papers_used": ["string"]
+    }
   }
-}
 ```
 
 | 欄位名稱        | 型別     | 描述                                   | 範例                                                        |
@@ -310,81 +427,7 @@ curl -X POST -H "Content-Type: application/json" \
   https://n8n.hsueh.tw/webhook/enhanced-organize-response
 ```
 
----
 
-## 6. multi_paper_content_analysis (**新增**)
-
-**描述：** 這個 workflow 處理非定義相關查詢的多檔案內容整合，根據建議章節的內容產生回答。
-
-**觸發方式：**
-
-* **類型：** Webhook
-* **HTTP 方法：** `POST`
-* **路徑：** `/webhook/multi-paper-content-analysis` (**待建立**)
-
-**輸入 (Request Body - `application/json`)：**
-
-```json
-{
-  "query": "string",
-  "papers": [
-    {
-      "file_name": "string",
-      "sections": [
-        {
-          "section_type": "string",
-          "content": "string",
-          "page_num": "number"
-        }
-      ]
-    }
-  ]
-}
-```
-
-**輸出 (Response Body - `application/json`)：**
-
-```json
-{
-  "response": "string",
-  "references": [
-    {
-      "id": "string",
-      "file_name": "string",
-      "section_type": "string", 
-      "content_excerpt": "string",
-      "page_num": "number"
-    }
-  ],
-  "source_summary": {
-    "total_papers": "number",
-    "sections_analyzed": ["string"],
-    "papers_used": ["string"]
-  }
-}
-```
-
-**範例呼叫：**
-
-```bash
-curl -X POST -H "Content-Type: application/json" \
-  -d '{
-    "query": "How to measure learning effectiveness?",
-    "papers": [
-      {
-        "file_name": "jones2023.pdf", 
-        "sections": [
-          {
-            "section_type": "method",
-            "content": "Learning effectiveness was measured using pre-post test scores...",
-            "page_num": 8
-          }
-        ]
-      }
-    ]
-  }' \
-  https://n8n.hsueh.tw/webhook/multi-paper-content-analysis
-```
 
 ---
 

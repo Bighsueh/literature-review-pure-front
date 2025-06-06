@@ -272,7 +272,7 @@ class QueryService {
 #### 步驟2: Grobid TEI處理
 ```typescript
 class GrobidService {
-  private readonly grobidBaseUrl = 'http://localhost:8070';
+  private readonly grobidBaseUrl = 'http://140.115.126.192:8070';
   
   async processDocument(paperId: string): Promise<GrobidTEIResult> {
     const fileBuffer = await this.getFileBuffer(paperId);
@@ -415,134 +415,155 @@ class SentenceProcessor {
 ```mermaid
 graph TD
     A[使用者發送查詢] --> B[取得勾選檔案清單]
-    B --> C[查詢意圖分析]
-    C --> D{是否為定義相關?}
-    D -->|是| E[路徑A: 定義查詢處理]
-    D -->|否| F[路徑B: 內容查詢處理]
-    
-    E --> E1[關鍵詞提取]
-    E1 --> E2[搜尋相關OD/CD句子]
-    E2 --> E3[多檔案定義整合]
-    E3 --> G[顯示結果與引用]
-    
-    F --> F1[章節建議分析]
-    F1 --> F2[提取相關章節內容]
-    F2 --> F3[多檔案內容整合]
-    F3 --> G
+    B --> C[獲取各檔案section摘要]
+    C --> D[LLM智能選擇相關sections]
+    D --> E[提取選中的section內容]
+    E --> F[統一整合分析回應]
+    F --> G[顯示結果與引用]
 ```
 
-### 路徑A: 定義查詢處理
+### 簡化的統一查詢處理流程
+
 ```typescript
-class DefinitionQueryProcessor {
+class UnifiedQueryProcessor {
   async processQuery(query: string, selectedPapers: string[]): Promise<QueryResult> {
-    // 1. 關鍵詞提取
-    const keywordResult = await this.n8nAPI.extractKeywords(query);
-    const keywords = keywordResult[0].output.keywords;
+    // 1. 獲取所有選中論文的section摘要
+    const papersWithSections = await this.getPapersWithSections(selectedPapers);
     
-    // 2. 搜尋相關句子
-    const relevantSentences = await this.searchDefinitionSentences(keywords, selectedPapers);
-    
-    // 3. 組織多檔案回應
-    const papersData = this.groupSentencesByPaper(relevantSentences);
-    
-    // 4. 調用增強型API
-    const response = await this.n8nAPI.enhancedOrganizeResponse({
+    // 2. 讓LLM智能選擇相關sections (取代意圖分類)
+    const sectionSelectionResult = await this.n8nAPI.intelligentSectionSelection({
       query: query,
-      papers: papersData
+      available_papers: papersWithSections
+    });
+    
+    // 3. 根據LLM選擇，提取相關內容
+    const selectedContent = await this.extractSelectedContent(
+      sectionSelectionResult.selected_sections
+    );
+    
+    // 4. 統一整合分析 (無需區分OD/CD或其他類型)
+    const response = await this.n8nAPI.unifiedContentAnalysis({
+      query: query,
+      selected_content: selectedContent,
+      analysis_focus: sectionSelectionResult.analysis_focus
     });
     
     return {
-      type: 'definition',
       response: response.response,
       references: response.references,
-      keywords: keywords,
+      selected_sections: sectionSelectionResult.selected_sections,
+      analysis_focus: sectionSelectionResult.analysis_focus,
       source_summary: response.source_summary
     };
   }
   
-  private async searchDefinitionSentences(
-    keywords: string[], 
-    paperIds: string[]
-  ): Promise<SentenceWithPaper[]> {
-    const sentences = await this.db.searchSentences({
-      paper_ids: paperIds,
-      defining_types: ['OD', 'CD'],
-      keywords: keywords,
-      search_mode: 'keyword_match'
-    });
+  // 取得所有論文的section概覽
+  private async getPapersWithSections(paperIds: string[]): Promise<PaperSectionSummary[]> {
+    const papers = await this.db.getPapersWithSections(paperIds);
     
-    return sentences;
+    return papers.map(paper => ({
+      file_name: paper.file_name,
+      sections: paper.sections.map(section => ({
+        section_type: section.section_type,
+        page_num: section.page_num,
+        word_count: section.word_count,
+        // 提供section的簡短摘要 (前100字)
+        brief_content: section.content.substring(0, 100) + '...',
+        // 統計該section的OD/CD句子數量
+        od_count: section.sentences?.filter(s => s.defining_type === 'OD').length || 0,
+        cd_count: section.sentences?.filter(s => s.defining_type === 'CD').length || 0,
+        total_sentences: section.sentences?.length || 0
+      }))
+    }));
   }
   
-  private groupSentencesByPaper(sentences: SentenceWithPaper[]): PaperDefinitionData[] {
-    const paperGroups = new Map<string, PaperDefinitionData>();
+  // 根據LLM選擇，提取完整內容
+  private async extractSelectedContent(
+    selectedSections: SelectedSection[]
+  ): Promise<ExtractedContent[]> {
+    const extractedContent: ExtractedContent[] = [];
     
-    sentences.forEach(sentence => {
-      if (!paperGroups.has(sentence.file_name)) {
-        paperGroups.set(sentence.file_name, {
-          file_name: sentence.file_name,
-          operational_definitions: [],
-          conceptual_definitions: []
+    for (const selection of selectedSections) {
+      // 根據查詢需求決定提取方式
+      if (selection.focus_type === 'definitions') {
+        // 如果需要定義，優先提取OD/CD句子
+        const definitionSentences = await this.db.getDefinitionSentences({
+          paper_id: selection.paper_id,
+          section_id: selection.section_id,
+          types: ['OD', 'CD']
+        });
+        
+        extractedContent.push({
+          paper_name: selection.paper_name,
+          section_type: selection.section_type,
+          content_type: 'definitions',
+          content: definitionSentences.map(s => ({
+            text: s.sentence_text,
+            type: s.defining_type,
+            page_num: s.page_num
+          }))
+        });
+        
+      } else if (selection.focus_type === 'full_section') {
+        // 如果需要完整內容，提取整個section
+        const sectionContent = await this.db.getSectionContent(selection.section_id);
+        
+        extractedContent.push({
+          paper_name: selection.paper_name,
+          section_type: selection.section_type,
+          content_type: 'full_section',
+          content: sectionContent
+        });
+        
+      } else if (selection.focus_type === 'key_sentences') {
+        // 如果需要關鍵句子，基於關鍵詞搜尋
+        const relevantSentences = await this.db.searchSentencesByKeywords({
+          section_id: selection.section_id,
+          keywords: selection.keywords
+        });
+        
+        extractedContent.push({
+          paper_name: selection.paper_name,
+          section_type: selection.section_type,
+          content_type: 'key_sentences',
+          content: relevantSentences
         });
       }
-      
-      const paperData = paperGroups.get(sentence.file_name)!;
-      const sentenceData = {
-        sentence: sentence.sentence_text,
-        section: sentence.section_type,
-        page_num: sentence.page_num
-      };
-      
-      if (sentence.defining_type === 'OD') {
-        paperData.operational_definitions.push(sentenceData);
-      } else if (sentence.defining_type === 'CD') {
-        paperData.conceptual_definitions.push(sentenceData);
-      }
-    });
+    }
     
-    return Array.from(paperGroups.values());
+    return extractedContent;
   }
 }
-```
 
-### 路徑B: 內容查詢處理
-```typescript
-class ContentQueryProcessor {
-  async processQuery(query: string, selectedPapers: string[]): Promise<QueryResult> {
-    // 1. 章節建議
-    const sectionSuggestion = await this.n8nAPI.suggestSections(query);
-    const suggestedSections = sectionSuggestion.suggested_sections;
-    
-    // 2. 提取相關章節內容
-    const sectionContents = await this.extractSectionContents(suggestedSections, selectedPapers);
-    
-    // 3. 組織多檔案內容
-    const papersData = this.groupContentsByPaper(sectionContents);
-    
-    // 4. 調用內容分析API
-    const response = await this.n8nAPI.multiPaperContentAnalysis({
-      query: query,
-      papers: papersData
-    });
-    
-    return {
-      type: 'content',
-      response: response.response,
-      references: response.references,
-      suggested_sections: suggestedSections,
-      source_summary: response.source_summary
-    };
-  }
-  
-  private async extractSectionContents(
-    sectionTypes: string[], 
-    paperIds: string[]
-  ): Promise<SectionWithPaper[]> {
-    return await this.db.getSectionsByTypes({
-      paper_ids: paperIds,
-      section_types: sectionTypes
-    });
-  }
+// 定義相關型別
+interface PaperSectionSummary {
+  file_name: string;
+  sections: {
+    section_type: string;
+    page_num: number;
+    word_count: number;
+    brief_content: string;
+    od_count: number;
+    cd_count: number;
+    total_sentences: number;
+  }[];
+}
+
+interface SelectedSection {
+  paper_id: string;
+  paper_name: string;
+  section_id: string;
+  section_type: string;
+  focus_type: 'definitions' | 'full_section' | 'key_sentences';
+  keywords?: string[];
+  selection_reason: string;
+}
+
+interface ExtractedContent {
+  paper_name: string;
+  section_type: string;
+  content_type: 'definitions' | 'full_section' | 'key_sentences';
+  content: any;
 }
 ```
 
@@ -862,7 +883,7 @@ async def process_query(
     query_data: QueryRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """處理使用者查詢"""
+    """處理使用者查詢 - 統一智能路由"""
     
     # 1. 取得選中的論文
     selected_papers = await db_service.get_selected_papers(db)
@@ -870,25 +891,30 @@ async def process_query(
     if not selected_papers:
         raise HTTPException(400, "請先選擇要分析的論文")
     
-    # 2. 查詢意圖分析
-    intent_result = await n8n_service.classify_query_intent(query_data.query)
-    
-    if intent_result.is_definition_related:
-        # 路徑A: 定義查詢
-        result = await definition_query_processor.process(
-            query_data.query, 
-            [p.id for p in selected_papers],
-            db
-        )
-    else:
-        # 路徑B: 內容查詢
-        result = await content_query_processor.process(
-            query_data.query,
-            [p.id for p in selected_papers],
-            db
-        )
+    # 2. 統一查詢處理 (無需意圖分類)
+    result = await unified_query_processor.process(
+        query_data.query,
+        [p.id for p in selected_papers],
+        db
+    )
     
     return result
+
+# === 論文section摘要API ===
+@app.get("/api/papers/sections_summary")
+async def get_papers_sections_summary(db: AsyncSession = Depends(get_db)):
+    """取得所有選中論文的section摘要資訊"""
+    selected_papers = await db_service.get_selected_papers(db)
+    
+    if not selected_papers:
+        return {"papers": []}
+    
+    papers_with_sections = await db_service.get_papers_with_sections_summary(
+        db, 
+        [p.id for p in selected_papers]
+    )
+    
+    return {"papers": papers_with_sections}
 
 # === 論文管理API ===
 @app.get("/api/papers")
@@ -1191,3 +1217,133 @@ export function useMultiClientSync() {
 - **TEI整合**：完整的Grobid TEI整合
 
 這個增強型系統提供了完整的多檔案論文分析能力，支援TEI儲存、自動檔案清理、批次處理、錯誤重試、進度追蹤等功能，完全滿足您的最低畢業要求。接下來我會為您制定詳細的開發backlog。 
+
+## 系統簡化與優化總結
+
+### ✅ **工作流程優化對比**
+
+#### 原設計 (複雜路徑)
+```
+查詢 → 意圖分類 → 路徑A(定義) / 路徑B(內容) → 不同處理邏輯 → 整合結果
+```
+
+#### 新設計 (統一智能路徑)
+```
+查詢 → 提供全部papers的sections摘要 → LLM智能選擇 → 統一內容分析 → 整合結果
+```
+
+### ✅ **核心改進點**
+
+1. **❌ 移除複雜意圖分類**
+   - 原本需要先判斷是否為「定義相關查詢」
+   - 分類錯誤會導致後續處理不當
+   - **改為**：直接讓LLM根據query和section資訊智能選擇
+
+2. **✅ 提供完整section資訊**
+   - 每個paper的所有section類型、頁數、字數
+   - 簡短內容預覽 (前100字)
+   - OD/CD句子統計 (od_count, cd_count)
+   - **讓LLM有足夠資訊做出最佳選擇**
+
+3. **✅ 靈活的內容提取策略**
+   - `definitions`：提取OD/CD句子
+   - `full_section`：提取完整章節內容
+   - `key_sentences`：基於關鍵詞的句子搜尋
+   - **LLM根據查詢性質決定最適合的策略**
+
+4. **✅ 統一的分析API**
+   - 單一 `unified_content_analysis` API
+   - 支援所有類型的分析需求
+   - 減少API維護複雜度
+
+### ✅ **N8N API 簡化**
+
+#### 原設計需要的APIs
+- ✅ `keywords_extraction` (保留)
+- ✅ `check_od_cd` (保留)  
+- ❌ `query_intent_classification` (移除)
+- ❌ `section_suggestion` (移除)
+- ❌ `enhanced_organize_response` (保留用於向後相容)
+- ❌ `multi_paper_content_analysis` (移除)
+
+#### 新設計只需要的APIs
+- ✅ `keywords_extraction` (現有)
+- ✅ `check_od_cd` (現有)
+- 🆕 `intelligent_section_selection` (新增)
+- 🆕 `unified_content_analysis` (新增)
+
+**API數量從6個減少為4個，維護成本降低33%**
+
+### ✅ **實際查詢範例對比**
+
+#### 範例查詢：「如何測量adaptive expertise的學習成效？」
+
+**原設計流程：**
+1. 意圖分析 → 判斷為「測量方法相關」(非定義)
+2. 章節建議 → 建議查找 `["method", "results"]`
+3. 提取內容 → 從所有papers的method/results章節提取
+4. 內容分析 → 調用 `multi_paper_content_analysis`
+
+**新設計流程：**
+1. 提供sections摘要 → 包含所有papers的完整section資訊
+2. LLM智能選擇 → 可能選擇：
+   - paper1的method section (focus_type: key_sentences, keywords: [measurement, assessment])
+   - paper2的results section (focus_type: full_section)
+   - paper3的introduction section (focus_type: definitions - 如果包含相關定義)
+3. 統一分析 → 一次API調用處理所有內容
+
+**優勢：LLM可以跨section類型智能選擇，不受預設規則限制**
+
+### ✅ **前端實作簡化**
+
+```typescript
+// 原設計 - 複雜的條件處理
+const processQuery = async (query: string) => {
+  const intent = await n8nAPI.classifyIntent(query);
+  
+  if (intent.is_definition_related) {
+    const keywords = await n8nAPI.extractKeywords(query);
+    const definitions = await searchDefinitions(keywords);
+    const result = await n8nAPI.enhancedOrganizeResponse({query, papers: definitions});
+  } else {
+    const sections = await n8nAPI.suggestSections(query);
+    const content = await extractSectionContent(sections);
+    const result = await n8nAPI.multiPaperContentAnalysis({query, papers: content});
+  }
+};
+
+// 新設計 - 統一簡潔流程
+const processQuery = async (query: string) => {
+  const papersWithSections = await api.getPapersSectionsSummary();
+  const sectionSelection = await n8nAPI.intelligentSectionSelection({
+    query, 
+    available_papers: papersWithSections
+  });
+  const selectedContent = await extractSelectedContent(sectionSelection.selected_sections);
+  const result = await n8nAPI.unifiedContentAnalysis({
+    query, 
+    selected_content: selectedContent,
+    analysis_focus: sectionSelection.analysis_focus
+  });
+};
+```
+
+### ✅ **系統維護優勢**
+
+1. **降低LLM Token消耗**：
+   - 減少多次意圖分析調用
+   - 單次調用包含更多上下文資訊
+
+2. **提高回應準確性**：
+   - LLM能看到完整的section選擇空間
+   - 避免預設分類的偏見
+
+3. **增強擴展性**：
+   - 新增論文章節類型時，無需修改分類邏輯
+   - LLM自然適應新的section結構
+
+4. **簡化錯誤處理**：
+   - 減少多階段處理的錯誤點
+   - 統一的API錯誤處理機制
+
+這個簡化設計完美符合您的建議，讓LLM做它最擅長的事：**基於豐富的上下文資訊做出智能決策**，而不是依賴預設的分類規則。 
