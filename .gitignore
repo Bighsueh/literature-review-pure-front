@@ -89,6 +89,7 @@ test_*.py
 test_*.txt
 test_*.pdf
 simple_test_*.py
+test_*.sh
 
 # Documentation and reports
 *_COMPLETION_REPORT.md
