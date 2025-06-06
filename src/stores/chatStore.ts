@@ -1,6 +1,6 @@
 // stores/chatStore.ts
 import { create } from 'zustand';
-import { devtools, persist } from 'zustand/middleware';
+import { devtools, persist, createJSONStorage } from 'zustand/middleware';
 import { Conversation, Message } from '../types/chat';
 
 interface ChatState {
@@ -123,7 +123,25 @@ export const useChatStore = create<ChatState>()(
           currentConversationId: null
         }),
       }),
-      { name: 'chat-storage' }
+      { 
+        name: 'chat-storage',
+        storage: createJSONStorage(() => localStorage, {
+          replacer: (key, value) => {
+            // 將 Date 對象轉換為 ISO 字符串
+            if (value instanceof Date) {
+              return value.toISOString();
+            }
+            return value;
+          },
+          reviver: (key, value) => {
+            // 將日期字段字符串轉換回 Date 對象
+            if ((key === 'timestamp' || key === 'createdAt' || key === 'updatedAt') && typeof value === 'string') {
+              return new Date(value);
+            }
+            return value;
+          }
+        })
+      }
     )
   )
 );
