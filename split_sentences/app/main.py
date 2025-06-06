@@ -9,7 +9,8 @@ from typing import Dict, List, Any, Optional, Union
 import logging
 
 from .pdf_processor import PDFProcessor, ProcessingStatus
-from .models import SentenceResponse, ErrorResponse, HealthResponse
+from .models import SentenceResponse, ErrorResponse, HealthResponse, TEISplitRequest, TEISplitResponse
+from .tei_processor import TEIProcessor
 
 # 配置日誌
 logging.basicConfig(level=logging.INFO, 
@@ -39,6 +40,9 @@ processing_statuses: Dict[str, ProcessingStatus] = {}
 # 創建上傳目錄
 UPLOAD_DIR = "upload_data"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# 初始化 TEI 處理器
+tei_processor = TEIProcessor()
 
 # 健康檢查端點
 @app.get("/health", response_model=HealthResponse, tags=["系統"])
@@ -75,6 +79,52 @@ async def process_pdf(file: UploadFile = File(...), background_tasks: Background
     except Exception as e:
         logger.error(f"處理 PDF 時發生錯誤: {str(e)}")
         raise HTTPException(status_code=500, detail=f"處理 PDF 時發生錯誤: {str(e)}")
+
+# 新增：TEI 句子切分端點
+@app.post("/api/split-sentences", response_model=TEISplitResponse,
+          responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+          tags=["TEI 處理"])
+async def split_tei_sentences(request: TEISplitRequest):
+    """
+    處理 TEI 格式的章節內容，將其切分為句子
+    
+    這個端點接收 Grobid 處理後的結構化章節資料，
+    並使用進階的 NLP 技術將每個章節切分為高品質的句子。
+    
+    Args:
+        request: 包含章節列表和語言設定的請求
+        
+    Returns:
+        TEISplitResponse: 包含切分後句子和處理統計的回應
+    """
+    try:
+        logger.info(f"收到 TEI 句子切分請求：{len(request.sections)} 個章節")
+        
+        # 驗證請求
+        if not request.sections:
+            raise HTTPException(
+                status_code=400, 
+                detail="請求中必須包含至少一個章節"
+            )
+        
+        # 處理 TEI 章節
+        result = tei_processor.process_tei_sections(
+            sections=request.sections,
+            language=request.language
+        )
+        
+        logger.info(f"TEI 處理完成：生成 {len(result.sentences)} 個句子")
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"處理 TEI 句子切分時發生錯誤: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"處理 TEI 句子切分時發生錯誤: {str(e)}"
+        )
 
 # WebSocket 端點
 @app.websocket("/ws/process-pdf/{client_id}")
