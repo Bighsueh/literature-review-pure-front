@@ -50,7 +50,7 @@ class DatabaseService:
         result = await db.execute(query)
         return result.scalar_one_or_none()
     
-    async def get_all_papers(self, db: AsyncSession) -> List[PaperResponse]:
+    async def get_all_papers(self, db: AsyncSession) -> List[Dict[str, Any]]:
         """取得所有論文，包含選取狀態"""
         query = (
             select(Paper, PaperSelection.is_selected)
@@ -63,20 +63,24 @@ class DatabaseService:
         for paper, is_selected in result:
             paper_dict = {
                 "id": str(paper.id),
-                "file_name": paper.file_name,
-                "original_filename": paper.original_filename,
-                "file_size": paper.file_size,
-                "upload_timestamp": paper.upload_timestamp,
+                "title": paper.original_filename or paper.file_name,
+                "file_path": paper.file_name,
+                "file_hash": paper.file_hash,
+                "upload_time": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
                 "processing_status": paper.processing_status,
-                "grobid_processed": paper.grobid_processed,
-                "sentences_processed": paper.sentences_processed,
-                "pdf_deleted": paper.pdf_deleted,
-                "error_message": paper.error_message,
-                "processing_completed_at": paper.processing_completed_at,
-                "created_at": paper.created_at,
-                "is_selected": is_selected if is_selected is not None else False
+                "selected": is_selected if is_selected is not None else False,
+                "authors": [],  # Placeholder, to be implemented
+                "section_count": 0,  # Placeholder, to be implemented
+                "sentence_count": 0,  # Placeholder, to be implemented
+                
+                # Keep original fields for compatibility if needed elsewhere
+                "original_filename": paper.original_filename,
+                "file_name": paper.file_name,
+                "upload_timestamp": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
+                "is_selected": is_selected if is_selected is not None else False,
+                "created_at": paper.created_at.isoformat() if paper.created_at else datetime.now().isoformat(),
             }
-            papers.append(PaperResponse(**paper_dict))
+            papers.append(paper_dict)
         
         return papers
     
@@ -114,8 +118,8 @@ class DatabaseService:
             # 最後刪除論文主記錄
             result = await db.execute(delete(Paper).where(Paper.id == paper_id))
             
-        await db.commit()
-        return result.rowcount > 0
+            await db.commit()
+            return result.rowcount > 0
         except Exception as e:
             await db.rollback()
             # 可以在這裡記錄錯誤
