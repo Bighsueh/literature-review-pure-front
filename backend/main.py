@@ -252,8 +252,8 @@ async def json_parsing_middleware(request: Request, call_next):
                 "detail": "請求處理錯誤",
                 "error_code": "REQUEST_PROCESSING_ERROR",
                 "details": {"message": str(e)}
-            }
-        )
+        }
+    )
 
 
 @app.exception_handler(Exception)

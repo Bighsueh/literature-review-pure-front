@@ -1,6 +1,6 @@
 // stores/fileStore.ts
 import { create } from 'zustand';
-import { devtools, persist } from 'zustand/middleware';
+import { devtools, persist, createJSONStorage } from 'zustand/middleware';
 import { FileData, ProcessedSentence } from '../types/file';
 
 interface FileState {
@@ -66,7 +66,29 @@ export const useFileStore = create<FileState>()(
           sentences: []
         })
       }),
-      { name: 'file-storage' }
+      { 
+        name: 'file-storage',
+        storage: createJSONStorage(() => localStorage, {
+          replacer: (key, value) => {
+            // 將 Date 對象轉換為 ISO 字符串
+            if (value instanceof Date) {
+              return value.toISOString();
+            }
+            // 移除 blob 屬性以避免序列化問題
+            if (key === 'blob') {
+              return undefined;
+            }
+            return value;
+          },
+          reviver: (key, value) => {
+            // 將 uploadedAt 字符串轉換回 Date 對象
+            if (key === 'uploadedAt' && typeof value === 'string') {
+              return new Date(value);
+            }
+            return value;
+          }
+        })
+      }
     )
   )
 );

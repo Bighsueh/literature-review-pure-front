@@ -114,8 +114,8 @@ class DatabaseService:
             # 最後刪除論文主記錄
             result = await db.execute(delete(Paper).where(Paper.id == paper_id))
             
-            await db.commit()
-            return result.rowcount > 0
+        await db.commit()
+        return result.rowcount > 0
         except Exception as e:
             await db.rollback()
             # 可以在這裡記錄錯誤
@@ -529,4 +529,4 @@ class DatabaseService:
         ]
 
 # 建立服務實例
-db_service = DatabaseService()
+db_service = DatabaseService() 
