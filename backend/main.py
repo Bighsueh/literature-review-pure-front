@@ -247,39 +247,30 @@ async def json_parsing_middleware(request: Request, call_next):
     except Exception as e:
         logger.error(f"JSON 解析中間件錯誤: {e}", exc_info=True)
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={
-                "detail": "請求處理錯誤",
-                "error_code": "REQUEST_PROCESSING_ERROR",
-                "details": {"message": str(e)}
-        }
-    )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "內部伺服器錯誤", "error_code": "UNEXPECTED_ERROR"}
+        )
 
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
-    """一般例外處理器"""
-    logger.error(
-        "未處理的例外",
-        error=str(exc),
-        path=request.url.path,
-        exc_info=True
-    )
-    
+    """通用例外處理器"""
+    logger.error(f"未處理的例外: {exc}", exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "detail": "內部伺服器錯誤",
-            "error_code": "INTERNAL_ERROR",
-            "details": {"error": str(exc)} if settings.debug else {}
-        }
+        content={"detail": "內部伺服器錯誤", "error_code": "UNEXPECTED_ERROR"}
     )
 
 
-# 基本路由
+# 包含API路由
+app.include_router(files_router, prefix="/api", tags=["upload"])
+app.include_router(papers_router, prefix="/api", tags=["papers"])
+app.include_router(processing_router, prefix="/api", tags=["processing"])
+
+
 @app.get("/")
 async def root():
-    """根路徑"""
+    """根端點，顯示應用程式資訊"""
     return {
         "success": True,
         "message": "論文分析系統API",
@@ -324,25 +315,6 @@ async def api_info():
             }
         }
     }
-
-
-# 註冊API路由
-app.include_router(files_router)
-app.include_router(papers_router)
-app.include_router(processing_router)
-
-
-if __name__ == "__main__":
-    import uvicorn
-    
-    # 開發模式運行
-    uvicorn.run(
-        "backend.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=settings.debug,
-        log_level=settings.log_level.lower()
-    ) 
 
 
 if __name__ == "__main__":

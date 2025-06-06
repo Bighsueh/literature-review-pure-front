@@ -17,11 +17,11 @@ from ..core.exceptions import (
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/papers", tags=["papers"])
+router = APIRouter(prefix="/papers", tags=["papers"])
 
 # ===== 論文基本管理 =====
 
-@router.get("/", response_model=List[PaperResponse])
+@router.get("/", response_model=List[Dict[str, Any]])
 async def get_papers(db: AsyncSession = Depends(get_db)):
     """取得所有論文清單"""
     try:
@@ -30,7 +30,7 @@ async def get_papers(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         raise handle_internal_error(f"取得論文清單失敗: {str(e)}")
 
-@router.get("/selected", response_model=List[PaperResponse])
+@router.get("/selected", response_model=List[Dict[str, Any]])
 async def get_selected_papers(db: AsyncSession = Depends(get_db)):
     """取得已選取的論文清單"""
     try:
