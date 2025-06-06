@@ -177,7 +177,7 @@ async def get_processing_status(
         return {
             "success": True,
             "status": paper.processing_status,
-            "message": paper.processing_message
+            "message": paper.error_message if paper.error_message else "處理中..."
         }
     except HTTPException:
         raise
@@ -197,7 +197,7 @@ async def retry_processing(
             raise handle_not_found_error("論文不存在")
         
         # 更新處理狀態
-        await db_service.update_paper_processing_status(
+        await db_service.update_paper_status(
             db,
             paper_id,
             "PENDING",
@@ -205,10 +205,10 @@ async def retry_processing(
         )
         
         # 加入背景任務
+        from .upload import process_paper_pipeline
         background_tasks.add_task(
-            db_service.process_paper,
-            paper_id,
-            is_retry=True
+            process_paper_pipeline,
+            paper_id
         )
         
         return {
