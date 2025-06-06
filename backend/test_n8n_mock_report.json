@@ -1,0 +1,61 @@
+{
+  "timestamp": "2025-06-06T05:29:33.259760",
+  "test_type": "Mock API Format Validation",
+  "backlog": "Backlog #8: 新N8N API建立",
+  "success_rate": 100.0,
+  "total_tests": 3,
+  "passed_tests": 3,
+  "test_results": {
+    "智能章節選擇API格式驗證": {
+      "success": true,
+      "message": "智能章節選擇API格式完全正確",
+      "input_fields_verified": [
+        "query",
+        "available_papers",
+        "max_sections",
+        "timestamp"
+      ],
+      "output_fields_verified": [
+        "selected_sections",
+        "analysis_focus",
+        "suggested_approach"
+      ],
+      "selected_sections_count": 3,
+      "api_calls": 1
+    },
+    "統一內容分析API格式驗證": {
+      "success": true,
+      "message": "統一內容分析API格式完全正確",
+      "input_fields_verified": [
+        "query",
+        "selected_content",
+        "analysis_focus",
+        "timestamp"
+      ],
+      "output_fields_verified": [
+        "response",
+        "references",
+        "source_summary"
+      ],
+      "references_count": 3,
+      "response_length": 396
+    },
+    "增強型組織回應API格式驗證": {
+      "success": true,
+      "message": "增強型組織回應API格式完全正確",
+      "input_fields_verified": [
+        "query",
+        "papers",
+        "timestamp"
+      ],
+      "output_fields_verified": [
+        "response",
+        "references",
+        "source_summary"
+      ],
+      "references_count": 5,
+      "papers_used_count": 2
+    }
+  },
+  "completion_status": "format_validated"
+}

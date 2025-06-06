@@ -1,0 +1,17 @@
+# 開發環境 Dockerfile
+FROM node:18-alpine
+
+WORKDIR /app
+
+# 安裝依賴
+COPY package*.json ./
+RUN npm install
+
+# 複製源碼
+COPY . .
+
+# 暴露開發服務器端口
+EXPOSE 5173
+
+# 啟動開發服務器
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"] 

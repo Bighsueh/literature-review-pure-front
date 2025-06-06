@@ -1,0 +1,300 @@
+{
+  "timestamp": "2025-06-06T05:17:40.838299",
+  "overall_success_rate": 98.21428571428571,
+  "backlog_success_rate": 100.0,
+  "total_time": 0.001051187515258789,
+  "results": {
+    "Backlog #1: 資料庫服務": {
+      "success": true,
+      "success_rate": 100.0,
+      "tests_passed": 6,
+      "total_tests": 6,
+      "issues": [],
+      "tests": [
+        [
+          "資料庫服務初始化",
+          true
+        ],
+        [
+          "資料庫設定",
+          true
+        ],
+        [
+          "檔案存在: backend/core/database.py",
+          true
+        ],
+        [
+          "檔案存在: backend/core/config.py",
+          true
+        ],
+        [
+          "檔案存在: backend/core/logging.py",
+          true
+        ],
+        [
+          "檔案存在: backend/services/db_service.py",
+          true
+        ]
+      ]
+    },
+    "Backlog #2: 檔案管理服務": {
+      "success": true,
+      "success_rate": 100.0,
+      "tests_passed": 6,
+      "total_tests": 6,
+      "issues": [],
+      "tests": [
+        [
+          "檔案服務方法",
+          true
+        ],
+        [
+          "暫存目錄",
+          true
+        ],
+        [
+          "方法: calculate_file_hash",
+          true
+        ],
+        [
+          "方法: is_file_duplicate",
+          true
+        ],
+        [
+          "方法: cleanup_temp_files",
+          true
+        ],
+        [
+          "方法: list_files",
+          true
+        ]
+      ]
+    },
+    "Backlog #3: Grobid服務整合": {
+      "success": true,
+      "success_rate": 100.0,
+      "tests_passed": 4,
+      "total_tests": 4,
+      "issues": [],
+      "tests": [
+        [
+          "Grobid服務方法",
+          true
+        ],
+        [
+          "Grobid URL設定",
+          true
+        ],
+        [
+          "Grobid服務檔案",
+          true
+        ],
+        [
+          "HTTP客戶端整合",
+          true
+        ]
+      ]
+    },
+    "Backlog #4: 檔案管理服務": {
+      "success": true,
+      "success_rate": 100.0,
+      "tests_passed": 7,
+      "total_tests": 7,
+      "issues": [],
+      "tests": [
+        [
+          "進階方法: upload_file",
+          true
+        ],
+        [
+          "進階方法: calculate_file_hash",
+          true
+        ],
+        [
+          "進階方法: is_file_duplicate",
+          true
+        ],
+        [
+          "進階方法: cleanup_expired_files",
+          true
+        ],
+        [
+          "進階方法: get_file_metadata",
+          true
+        ],
+        [
+          "檔案去重結構",
+          true
+        ],
+        [
+          "模擬檔案操作",
+          true
+        ]
+      ]
+    },
+    "Backlog #5: Grobid Docker整合": {
+      "success": true,
+      "success_rate": 100.0,
+      "tests_passed": 10,
+      "total_tests": 10,
+      "issues": [],
+      "tests": [
+        [
+          "完整功能: process_paper_complete",
+          true
+        ],
+        [
+          "完整功能: parse_tei_xml",
+          true
+        ],
+        [
+          "完整功能: extract_metadata",
+          true
+        ],
+        [
+          "完整功能: extract_sections",
+          true
+        ],
+        [
+          "完整功能: classify_section_type",
+          true
+        ],
+        [
+          "TEI解析: extract_title_from_tei",
+          true
+        ],
+        [
+          "TEI解析: extract_authors_from_tei",
+          true
+        ],
+        [
+          "TEI解析: extract_sections_from_tei",
+          true
+        ],
+        [
+          "TEI解析: extract_references_from_tei",
+          true
+        ],
+        [
+          "章節分類系統",
+          true
+        ]
+      ]
+    },
+    "Backlog #6: N8N API整合服務": {
+      "success": true,
+      "success_rate": 87.5,
+      "tests_passed": 7,
+      "total_tests": 8,
+      "issues": [
+        "快取機制缺失"
+      ],
+      "tests": [
+        [
+          "N8N核心: detect_od_cd",
+          true
+        ],
+        [
+          "N8N核心: extract_keywords",
+          true
+        ],
+        [
+          "N8N核心: intelligent_section_selection",
+          true
+        ],
+        [
+          "N8N核心: unified_content_analysis",
+          true
+        ],
+        [
+          "HTTP客戶端檔案",
+          true
+        ],
+        [
+          "批次處理: batch_detect_od_cd",
+          true
+        ],
+        [
+          "批次處理: health_check",
+          true
+        ],
+        [
+          "快取機制",
+          false
+        ]
+      ]
+    },
+    "Backlog #7: 批次處理核心邏輯": {
+      "success": true,
+      "success_rate": 100.0,
+      "tests_passed": 15,
+      "total_tests": 15,
+      "issues": [],
+      "tests": [
+        [
+          "佇列服務: add_task",
+          true
+        ],
+        [
+          "佇列服務: get_task",
+          true
+        ],
+        [
+          "佇列服務: cancel_task",
+          true
+        ],
+        [
+          "佇列服務: start_workers",
+          true
+        ],
+        [
+          "佇列服務: stop_workers",
+          true
+        ],
+        [
+          "處理服務: process_file",
+          true
+        ],
+        [
+          "處理服務: batch_process_files",
+          true
+        ],
+        [
+          "處理服務: get_processing_status",
+          true
+        ],
+        [
+          "流水線: _validate_file",
+          true
+        ],
+        [
+          "流水線: _process_with_grobid",
+          true
+        ],
+        [
+          "流水線: _analyze_sections",
+          true
+        ],
+        [
+          "流水線: _extract_sentences",
+          true
+        ],
+        [
+          "流水線: _store_results",
+          true
+        ],
+        [
+          "處理API檔案",
+          true
+        ],
+        [
+          "資料庫架構",
+          true
+        ]
+      ]
+    }
+  },
+  "all_issues": [
+    "快取機制缺失"
+  ]
+}
