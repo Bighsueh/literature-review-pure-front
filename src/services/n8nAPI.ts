@@ -67,7 +67,7 @@ export class N8nAPI {
 
     const workerEndpoints = API_CONFIG.n8n.endpoints.checkOdCdWorkers;
     const results: { sentence: string; result: N8nOdCdResponse }[] = [];
-    const BATCH_SIZE = 10; // 一次最多處理 10 個請求
+    const BATCH_SIZE = 20; // ✅ 一次最多處理 20 個請求
     
     // 複製一份句子作為任務佇列
     const taskQueue = [...sentences];

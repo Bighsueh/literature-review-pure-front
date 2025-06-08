@@ -54,6 +54,7 @@ const WelcomeTour: React.FC<WelcomeTourProps> = ({ onTourComplete }) => {
       },
       steps: [
         {
+          element: '#file-upload-zone',
           popover: {
             title: '歡迎使用定義查詢助手！ 🎉',
             description: `

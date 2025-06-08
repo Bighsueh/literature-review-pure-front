@@ -6,7 +6,10 @@ import { ProcessingStage } from '../../../types/api';
 const ProgressDisplay: React.FC = () => {
   const { progress } = useAppStore();
   
+  const isIdle = progress.currentStage === 'idle' && !progress.isProcessing;
+  
   const getStageTitle = (stage: ProcessingStage): string => {
+    if (isIdle) return '處理完成';
     const titles: Record<ProcessingStage, string> = {
       idle: '準備就緒',
       uploading: '上傳檔案',
@@ -23,6 +26,7 @@ const ProgressDisplay: React.FC = () => {
   };
   
   const getStageDescription = (stage: ProcessingStage): string => {
+    if (isIdle) return '系統已準備好，可開始新的處理任務。';
     const descriptions: Record<ProcessingStage, string> = {
       idle: '系統已準備好處理檔案或查詢',
       uploading: '正在將檔案發送到 split_sentences 服務...',
@@ -122,31 +126,26 @@ const ProgressDisplay: React.FC = () => {
     }
   };
 
-  // 如果當前階段是閒置狀態，不顯示進度條
-  if (progress.currentStage === 'idle' && !progress.isProcessing) {
-    return null;
-  }
-
   return (
-    <div className="bg-white rounded-lg shadow-sm p-4">
-      <h3 className="text-lg font-medium text-gray-900">
+    <div className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm">
+      <h3 className="text-base font-medium text-gray-800">
         {getStageTitle(progress.currentStage)}
       </h3>
       
-      <p className="text-sm text-gray-600 mt-1">
+      <p className="text-sm text-gray-500 mt-1">
         {getStageDescription(progress.currentStage)}
       </p>
       
-      <div className="mt-4">
+      <div className="mt-3">
         <ProgressBar 
-          progress={progress.percentage} 
-          stage={progress.currentStage}
+          progress={isIdle ? 100 : progress.percentage} 
+          stage={isIdle ? 'completed' : progress.currentStage}
           size="md"
           showLabel={true}
         />
       </div>
       
-      {renderStageDetails()}
+      {!isIdle && renderStageDetails()}
     </div>
   );
 };
