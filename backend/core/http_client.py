@@ -131,7 +131,42 @@ class HTTPClient:
         self.cache_hits = 0
         self.cache_misses = 0
         
-        logger.info(f"HTTP客戶端初始化完成，基礎URL: {base_url}")
+        # ✅ 創建持久的連接器和session
+        self._connector = aiohttp.TCPConnector(
+            limit=100,          # 總連接池大小
+            limit_per_host=20,  # 每個域名最多20個並發連接
+            keepalive_timeout=30,
+            enable_cleanup_closed=True
+        )
+        self._session = None
+        
+        logger.info(f"HTTP客戶端初始化完成，基礎URL: {base_url}, 每主機並發限制: 20")
+    
+    async def _get_session(self):
+        """獲取或創建持久session"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                connector=self._connector,
+                timeout=self.timeout
+            )
+        return self._session
+    
+    async def close(self):
+        """關閉HTTP客戶端"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+        if self._connector:
+            await self._connector.close()
+        logger.info("HTTP客戶端已關閉")
+    
+    def __del__(self):
+        """析構函數，確保資源清理"""
+        if hasattr(self, '_session') and self._session and not self._session.closed:
+            # 在事件循環中關閉session
+            try:
+                asyncio.create_task(self.close())
+            except:
+                pass
     
     def _build_url(self, endpoint: str) -> str:
         """構建完整URL"""
@@ -220,7 +255,7 @@ class HTTPClient:
                 self.cache_misses += 1
         
         # 準備請求參數
-        request_timeout = aiohttp.ClientTimeout(total=timeout or self.timeout.total)
+        request_timeout = aiohttp.ClientTimeout(total=timeout) if timeout else self.timeout
         request_headers = headers or {}
         
         # 重試邏輯
@@ -229,52 +264,55 @@ class HTTPClient:
         
         for attempt in range(1, self.max_retries + 1):
             try:
-                async with aiohttp.ClientSession(timeout=request_timeout) as session:
-                    logger.debug(f"發送請求: {method} {url} (嘗試 {attempt}/{self.max_retries})")
+                # ✅ 使用持久session而非每次創建新的
+                session = await self._get_session()
+                
+                logger.debug(f"發送請求: {method} {url} (嘗試 {attempt}/{self.max_retries})")
+                
+                async with session.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    data=data,
+                    json=json_data,
+                    headers=request_headers,
+                    timeout=request_timeout
+                ) as response:
+                    last_status_code = response.status
+                    response_text = await response.text()
                     
-                    async with session.request(
-                        method=method,
-                        url=url,
-                        params=params,
-                        data=data,
-                        json=json_data,
-                        headers=request_headers
-                    ) as response:
-                        last_status_code = response.status
-                        response_text = await response.text()
-                        
-                        # 記錄回應
-                        logger.debug(f"回應: {response.status} {url} ({len(response_text)} 字符)")
-                        
-                        if response.status >= 400:
-                            # HTTP錯誤
-                            if self._should_retry(attempt, response.status):
-                                logger.warning(f"HTTP錯誤 {response.status}，準備重試: {url}")
-                                await self._wait_retry(attempt)
-                                continue
-                            else:
-                                # 不重試，拋出錯誤
-                                error_msg = f"HTTP {response.status}: {response_text[:200]}"
-                                logger.error(f"HTTP錯誤: {error_msg}")
-                                raise aiohttp.ClientResponseError(
-                                    request_info=response.request_info,
-                                    history=response.history,
-                                    status=response.status,
-                                    message=error_msg
-                                )
-                        
-                        # 解析回應
-                        try:
-                            response_data = json.loads(response_text) if response_text else {}
-                        except json.JSONDecodeError:
-                            response_data = {"text": response_text}
-                        
-                        # 快取成功回應
-                        if (self.cache_enabled and not disable_cache and 
-                            self._should_cache(method, response.status)):
-                            self.cache.set(method, url, response_data, cache_ttl, params)
-                        
-                        return response_data
+                    # 記錄回應
+                    logger.debug(f"回應: {response.status} {url} ({len(response_text)} 字符)")
+                    
+                    if response.status >= 400:
+                        # HTTP錯誤
+                        if self._should_retry(attempt, response.status):
+                            logger.warning(f"HTTP錯誤 {response.status}，準備重試: {url}")
+                            await self._wait_retry(attempt)
+                            continue
+                        else:
+                            # 不重試，拋出錯誤
+                            error_msg = f"HTTP {response.status}: {response_text[:200]}"
+                            logger.error(f"HTTP錯誤: {error_msg}")
+                            raise aiohttp.ClientResponseError(
+                                request_info=response.request_info,
+                                history=response.history,
+                                status=response.status,
+                                message=error_msg
+                            )
+                    
+                    # 解析回應
+                    try:
+                        response_data = json.loads(response_text) if response_text else {}
+                    except json.JSONDecodeError:
+                        response_data = {"text": response_text}
+                    
+                    # 快取成功回應
+                    if (self.cache_enabled and not disable_cache and 
+                        self._should_cache(method, response.status)):
+                        self.cache.set(method, url, response_data, cache_ttl, params)
+                    
+                    return response_data
                         
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_exception = e
@@ -361,5 +399,7 @@ class HTTPClient:
             return False
 
 def create_client(base_url: str, timeout: int = 30, max_retries: int = 3) -> HTTPClient:
-    """建立專用HTTP客戶端"""
-    return HTTPClient(base_url=base_url, timeout=timeout, max_retries=max_retries) 
+    """建立專用HTTP客戶端，支援高並發連接"""
+    client = HTTPClient(base_url=base_url, timeout=timeout, max_retries=max_retries)
+    logger.info(f"HTTP客戶端創建完成，支援每主機20個並發連接")
+    return client 

@@ -376,64 +376,87 @@ class ProcessingService:
         sentences = [s["text"] for s in sentences_data]
         
         # 批次處理以避免超時
-        batch_size = 50
+        batch_size = 20  # ✅ 保持20的批次大小
         all_results = []
         
-        for i in range(0, len(sentences), batch_size):
-            batch_sentences = sentences[i:i + batch_size]
-            
-            try:
-                result = await n8n_service.detect_od_cd(
-                    sentences=batch_sentences,
-                    paper_title=grobid_result.get("title", ""),
-                    paper_authors=[author.get("full_name", "") for author in grobid_result.get("authors", [])]
-                )
+        # ✅ 使用真正的並發處理所有句子
+        logger.info(f"開始並發OD/CD檢測，句子總數: {len(sentences)}")
+        
+        # 創建所有檢測任務
+        detection_tasks = []
+        for idx, sentence in enumerate(sentences):
+            task = n8n_service.detect_od_cd(
+                sentence=sentence,
+                cache_key=f"od_cd_{hash(sentence)}"
+            )
+            detection_tasks.append((idx, task))
+        
+        # 使用Semaphore控制並發數
+        semaphore = asyncio.Semaphore(n8n_service.max_concurrent_requests)
+        
+        async def bounded_detection(idx, task):
+            async with semaphore:
+                try:
+                    result = await task
+                    return idx, True, result
+                except Exception as e:
+                    logger.warning(f"OD/CD檢測失敗，句子 {idx}: {e}")
+                    return idx, False, {"error": str(e)}
+        
+        # 並發執行所有檢測任務
+        bounded_tasks = [bounded_detection(idx, task) for idx, task in detection_tasks]
+        logger.info(f"並發執行 {len(bounded_tasks)} 個OD/CD檢測任務，最大並發數: {n8n_service.max_concurrent_requests}")
+        
+        detection_results = await asyncio.gather(*bounded_tasks, return_exceptions=True)
+        
+        # 處理結果
+        results_map = {}
+        successful_count = 0
+        
+        for result in detection_results:
+            if isinstance(result, Exception):
+                continue
                 
-                if "error" not in result and "results" in result:
-                    batch_results = result["results"]
+            idx, success, analysis = result
+            results_map[idx] = (success, analysis)
+            if success and "error" not in analysis:
+                successful_count += 1
+        
+        # 合併結果
+        for idx, sentence_data in enumerate(sentences_data):
+            if idx in results_map:
+                success, analysis = results_map[idx]
+                
+                if success and "error" not in analysis:
+                    defining_type = analysis.get("defining_type", "UNKNOWN").upper()
+                    is_od_cd = defining_type in ["OD", "CD"]
                     
-                    # 將結果與原始句子數據合併
-                    for j, detection_result in enumerate(batch_results):
-                        sentence_index = i + j
-                        if sentence_index < len(sentences_data):
-                            combined_result = {
-                                **sentences_data[sentence_index],
-                                "is_od_cd": detection_result.get("is_od_cd", False),
-                                "confidence": detection_result.get("confidence", 0.0),
-                                "od_cd_type": detection_result.get("od_cd_type", ""),
-                                "explanation": detection_result.get("explanation", "")
-                            }
-                            all_results.append(combined_result)
+                    combined_result = {
+                        **sentence_data,
+                        "is_od_cd": is_od_cd,
+                        "confidence": 1.0 if is_od_cd else 0.0,
+                        "od_cd_type": defining_type,
+                        "explanation": analysis.get("reason", "")
+                    }
                 else:
-                    logger.warning(f"OD/CD 檢測批次失敗: {result.get('error', '未知錯誤')}")
-                    # 添加默認結果
-                    for j in range(len(batch_sentences)):
-                        sentence_index = i + j
-                        if sentence_index < len(sentences_data):
-                            all_results.append({
-                                **sentences_data[sentence_index],
-                                "is_od_cd": False,
-                                "confidence": 0.0,
-                                "od_cd_type": "",
-                                "explanation": "檢測失敗"
-                            })
+                    combined_result = {
+                        **sentence_data,
+                        "is_od_cd": False,
+                        "confidence": 0.0,
+                        "od_cd_type": "UNKNOWN",
+                        "explanation": f"分析失敗: {analysis.get('error', '未知錯誤')}"
+                    }
+            else:
+                # 如果沒有結果，當作失敗處理
+                combined_result = {
+                    **sentence_data,
+                    "is_od_cd": False,
+                    "confidence": 0.0,
+                    "od_cd_type": "UNKNOWN",
+                    "explanation": "未獲得檢測結果"
+                }
             
-            except Exception as e:
-                logger.error(f"OD/CD 檢測批次異常: {e}")
-                # 添加錯誤結果
-                for j in range(len(batch_sentences)):
-                    sentence_index = i + j
-                    if sentence_index < len(sentences_data):
-                        all_results.append({
-                            **sentences_data[sentence_index],
-                            "is_od_cd": False,
-                            "confidence": 0.0,
-                            "od_cd_type": "",
-                            "explanation": f"檢測異常: {str(e)}"
-                        })
-            
-            # 避免 API 限流
-            await asyncio.sleep(0.5)
+            all_results.append(combined_result)
         
         detected_count = sum(1 for r in all_results if r.get("is_od_cd"))
         logger.info(f"OD/CD 檢測完成，檢測到 {detected_count}/{len(all_results)} 個 OD/CD 句子")
@@ -470,7 +493,7 @@ class ProcessingService:
                     logger.error(f"關鍵詞提取異常: {section['section_id']} - {e}")
                 
                 # 避免 API 限流
-                await asyncio.sleep(0.3)
+                # await asyncio.sleep(0.3)  # ✅ 暫時註解掉延遲
         
         total_keywords = sum(len(k["keywords"]) for k in all_keywords)
         logger.info(f"關鍵詞提取完成，從 {len(all_keywords)} 個章節提取 {total_keywords} 個關鍵詞")
@@ -624,11 +647,33 @@ class ProcessingService:
         logger.info(f"開始批次句子分析: {len(sentences)} 個句子")
         
         if analysis_type == "od_cd_detection":
-            result = await n8n_service.detect_od_cd(
-                sentences=sentences,
-                paper_title=task.data.get("paper_title", ""),
-                paper_authors=task.data.get("paper_authors", [])
-            )
+            # 修正：逐句處理而非批次傳遞
+            sentence_results = []
+            for sentence in sentences:
+                try:
+                    result = await n8n_service.detect_od_cd(
+                        sentence=sentence,  # ✅ 正確的單句調用
+                        cache_key=f"batch_analysis_{hash(sentence)}"
+                    )
+                    sentence_results.append({
+                        "sentence": sentence,
+                        "result": result
+                    })
+                except Exception as e:
+                    logger.warning(f"批次分析單句失敗: {e}")
+                    sentence_results.append({
+                        "sentence": sentence,
+                        "result": {"error": str(e)}
+                    })
+                
+                # 控制API調用頻率
+                # await asyncio.sleep(0.1)  # ✅ 暫時註解掉延遲
+            
+            return {
+                "results": sentence_results,
+                "total_sentences": len(sentences),
+                "successful_detections": len([r for r in sentence_results if "error" not in r["result"]])
+            }
         else:
             raise ValueError(f"不支援的分析類型: {analysis_type}")
         

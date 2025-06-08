@@ -58,7 +58,7 @@ class N8NService:
         # API端點配置 (根據 n8n_api_document.md)
         self.endpoints = {
             'od_cd_detection': '/webhook/check-od-cd',
-            'keyword_extraction': '/webhook/421337df-0d97-47b4-a96b-a70a6c35d416',
+            'keyword_extraction': '/webhook/keyword-extraction',
             'intelligent_section_selection': '/webhook/intelligent-section-selection',
             'unified_content_analysis': '/webhook/unified-content-analysis',
             'enhanced_organization': '/webhook/enhanced-organize-response'
@@ -66,9 +66,9 @@ class N8NService:
         
         # 批次處理配置
         self.batch_queue: List[BatchRequest] = []
-        self.max_batch_size = 10
+        self.max_batch_size = 20  # ✅ 提高到20
         self.batch_timeout = 30  # 秒
-        self.max_concurrent_requests = 5
+        self.max_concurrent_requests = 20  # ✅ 提高到20
         
         # 快取配置
         self.client.enable_cache(ttl_seconds=600)  # 10分鐘快取
@@ -705,9 +705,9 @@ class N8NService:
         
         # 批次處理配置
         self.batch_queue: List[BatchRequest] = []
-        self.max_batch_size = 10
+        self.max_batch_size = 20  # ✅ 提高到20
         self.batch_timeout = 30  # 秒
-        self.max_concurrent_requests = 5
+        self.max_concurrent_requests = 20  # ✅ 提高到20
         
         # 快取配置
         self.client.enable_cache(ttl_seconds=600)  # 10分鐘快取
@@ -1135,7 +1135,7 @@ class N8NService:
         progress_callback: callable = None
     ) -> List[Dict[str, Any]]:
         """
-        批次OD/CD檢測
+        批次OD/CD檢測 - 使用真正的並發處理
         
         Args:
             paper_sentences_list: 包含paper_id和sentences的列表
@@ -1146,51 +1146,106 @@ class N8NService:
         """
         logger.info(f"開始批次OD/CD檢測，論文數量: {len(paper_sentences_list)}")
         
-        results = []
-        total_papers = len(paper_sentences_list)
+        # ✅ 收集所有句子任務，實現真正的並發處理
+        all_tasks = []
+        task_to_paper_map = {}  # 任務ID到論文數據的映射
         
-        for i, paper_data in enumerate(paper_sentences_list):
-            try:
-                paper_id = paper_data.get('paper_id')
-                sentences = paper_data.get('sentences', [])
-                paper_title = paper_data.get('title', '')
-                paper_authors = paper_data.get('authors', [])
+        for paper_data in paper_sentences_list:
+            paper_id = paper_data.get('paper_id')
+            sentences = paper_data.get('sentences', [])
+            
+            for sentence_idx, sentence in enumerate(sentences):
+                task_id = f"{paper_id}_{sentence_idx}"
                 
-                # 執行檢測
-                detection_result = await self.detect_od_cd(
-                    sentences=sentences,
-                    paper_title=paper_title,
-                    paper_authors=paper_authors,
-                    cache_key=f"od_cd_{paper_id}"
+                # 創建並發任務
+                task = self.detect_od_cd(
+                    sentence=sentence,
+                    cache_key=f"batch_od_cd_{paper_id}_{hash(sentence)}"
                 )
                 
-                results.append({
+                all_tasks.append(task)
+                task_to_paper_map[len(all_tasks) - 1] = {
                     'paper_id': paper_id,
-                    'detection_result': detection_result,
-                    'success': 'error' not in detection_result
-                })
-                
-                # 進度回調
-                if progress_callback:
-                    progress = (i + 1) / total_papers
-                    await progress_callback(progress, paper_id)
-                
-                # 避免API限流
-                if i < total_papers - 1:
-                    await asyncio.sleep(0.5)
-                    
-            except Exception as e:
-                logger.error(f"批次檢測失敗，論文ID: {paper_data.get('paper_id')}, 錯誤: {e}")
-                results.append({
-                    'paper_id': paper_data.get('paper_id'),
-                    'detection_result': {"error": str(e)},
-                    'success': False
-                })
+                    'paper_data': paper_data,
+                    'sentence': sentence,
+                    'sentence_idx': sentence_idx
+                }
         
-        success_count = sum(1 for r in results if r['success'])
-        logger.info(f"批次OD/CD檢測完成，成功: {success_count}/{total_papers}")
+        # ✅ 使用Semaphore控制並發數，執行所有任務
+        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
         
-        return results
+        async def bounded_task(task_idx, task):
+            async with semaphore:
+                try:
+                    result = await task
+                    return task_idx, True, result
+                except Exception as e:
+                    logger.warning(f"並發檢測任務失敗: {e}")
+                    return task_idx, False, {"error": str(e)}
+        
+        # 執行所有任務
+        logger.info(f"開始並發執行 {len(all_tasks)} 個檢測任務，最大並發數: {self.max_concurrent_requests}")
+        bounded_tasks = [bounded_task(i, task) for i, task in enumerate(all_tasks)]
+        task_results = await asyncio.gather(*bounded_tasks, return_exceptions=True)
+        
+        # ✅ 重新組織結果按論文分組
+        paper_results = {}
+        successful_count = 0
+        
+        for result in task_results:
+            if isinstance(result, Exception):
+                continue
+                
+            task_idx, success, detection_result = result
+            task_info = task_to_paper_map[task_idx]
+            paper_id = task_info['paper_id']
+            
+            if paper_id not in paper_results:
+                paper_results[paper_id] = {
+                    'paper_data': task_info['paper_data'],
+                    'sentence_results': [],
+                    'total_sentences': len(task_info['paper_data'].get('sentences', [])),
+                    'successful_detections': 0
+                }
+            
+            paper_results[paper_id]['sentence_results'].append({
+                'sentence': task_info['sentence'],
+                'sentence_idx': task_info['sentence_idx'],
+                'result': detection_result
+            })
+            
+            if success and "error" not in detection_result:
+                paper_results[paper_id]['successful_detections'] += 1
+                successful_count += 1
+        
+        # 格式化最終結果
+        final_results = []
+        for paper_id, paper_result in paper_results.items():
+            # 按句子索引排序
+            paper_result['sentence_results'].sort(key=lambda x: x['sentence_idx'])
+            
+            final_results.append({
+                'paper_id': paper_id,
+                'detection_result': {
+                    'results': paper_result['sentence_results'],
+                    'total_sentences': paper_result['total_sentences'],
+                    'successful_detections': paper_result['successful_detections']
+                },
+                'success': paper_result['successful_detections'] > 0
+            })
+            
+            # 進度回調
+            if progress_callback:
+                progress = len(final_results) / len(paper_sentences_list)
+                await progress_callback(progress, paper_id)
+        
+        total_sentences = len(all_tasks)
+        success_rate = (successful_count / total_sentences * 100) if total_sentences > 0 else 0
+        
+        logger.info(f"批次OD/CD檢測完成，論文: {len(final_results)}, 總句子: {total_sentences}, "
+                   f"成功: {successful_count}, 成功率: {success_rate:.1f}%")
+        
+        return final_results
     
     async def health_check(self) -> Dict[str, bool]:
         """檢查N8N服務健康狀態"""
