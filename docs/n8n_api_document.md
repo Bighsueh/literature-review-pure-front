@@ -57,7 +57,7 @@ curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
 
 * **類型：** Webhook
 * **HTTP 方法：** `POST`
-* **路徑：** `/webhook/421337df-0d97-47b4-a96b-a70a6c35d416`
+* **路徑：** `/webhook/keyword-extraction`
 
 **輸入 (Request Body - `application/x-www-form-urlencoded`)：**
 
@@ -87,7 +87,7 @@ curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
 ```bash
 curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
   -d "query=What is adaptive expertise?" \
-  https://n8n.hsueh.tw/webhook/421337df-0d97-47b4-a96b-a70a6c35d416
+  https://n8n.hsueh.tw/webhook/keyword-extraction
 ```
 
 **範例回應：**
