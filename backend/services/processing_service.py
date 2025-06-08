@@ -18,6 +18,8 @@ from .grobid_service import grobid_service
 from .n8n_service import n8n_service
 from .db_service import db_service
 from .split_sentences_service import split_sentences_service
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from ..database.connection import db_manager
 
 logger = get_logger("processing_service")
 
@@ -180,7 +182,7 @@ class ProcessingService:
             )
             
             storage_result = await self._store_results(
-                file_id=file_id,
+                paper_id=file_id,
                 grobid_result=grobid_result,
                 sections_analysis=sections_analysis,
                 sentences_data=sentences_data,
@@ -371,95 +373,114 @@ class ProcessingService:
         sentences_data: List[Dict[str, Any]],
         grobid_result: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """OD/CD 檢測"""
-        # 準備句子列表
-        sentences = [s["text"] for s in sentences_data]
-        
-        # 批次處理以避免超時
-        batch_size = 20  # ✅ 保持20的批次大小
-        all_results = []
-        
-        # ✅ 使用真正的並發處理所有句子
-        logger.info(f"開始並發OD/CD檢測，句子總數: {len(sentences)}")
-        
-        # 創建所有檢測任務
-        detection_tasks = []
-        for idx, sentence in enumerate(sentences):
-            task = n8n_service.detect_od_cd(
-                sentence=sentence,
-                cache_key=f"od_cd_{hash(sentence)}"
-            )
-            detection_tasks.append((idx, task))
+        """OD/CD 檢測，帶有重試機制，確保單個失敗不影響整個批次"""
+        logger.info(f"開始OD/CD檢測，句子總數: {len(sentences_data)}")
         
         # 使用Semaphore控制並發數
         semaphore = asyncio.Semaphore(n8n_service.max_concurrent_requests)
         
-        async def bounded_detection(idx, task):
-            async with semaphore:
-                try:
-                    result = await task
-                    return idx, True, result
-                except Exception as e:
-                    logger.warning(f"OD/CD檢測失敗，句子 {idx}: {e}")
-                    return idx, False, {"error": str(e)}
+        async def detect_single_sentence_with_retry(idx: int, sentence_data: Dict[str, Any], max_retries: int = 3):
+            """單個句子檢測，帶有重試機制"""
+            sentence_text = sentence_data["text"]
+            
+            for attempt in range(max_retries):
+                async with semaphore:
+                    try:
+                        logger.debug(f"檢測句子 {idx}，嘗試 {attempt + 1}/{max_retries}")
+                        result = await n8n_service.detect_od_cd(
+                            sentence=sentence_text,
+                            cache_key=f"od_cd_{hash(sentence_text)}"
+                        )
+                        
+                        # 成功獲得結果
+                        if "error" not in result and "defining_type" in result:
+                            defining_type = result.get("defining_type", "UNKNOWN").upper()
+                            is_od_cd = defining_type in ["OD", "CD"]
+                            
+                            return {
+                                **sentence_data,
+                                "is_od_cd": is_od_cd,
+                                "confidence": 1.0 if is_od_cd else 0.0,
+                                "od_cd_type": defining_type,
+                                "explanation": result.get("reason", ""),
+                                "detection_status": "success",
+                                "retry_count": attempt
+                            }
+                        else:
+                            # API返回錯誤，但不重試，因為可能是業務邏輯問題
+                            logger.warning(f"句子 {idx} N8N API返回錯誤: {result}")
+                            break
+                            
+                    except Exception as e:
+                        logger.warning(f"句子 {idx} 檢測失敗，嘗試 {attempt + 1}/{max_retries}: {e}")
+                        
+                        # 如果不是最後一次嘗試，等待後重試
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(1 * (attempt + 1))  # 遞增等待時間
+                            continue
+                        else:
+                            # 最後一次嘗試也失敗了
+                            logger.error(f"句子 {idx} 經過 {max_retries} 次嘗試後仍然失敗: {e}")
+                            break
+            
+            # 三次嘗試都失敗，標記為錯誤
+            return {
+                **sentence_data,
+                "is_od_cd": False,
+                "confidence": 0.0,
+                "od_cd_type": "ERROR",
+                "explanation": f"API調用失敗，經過 {max_retries} 次重試",
+                "detection_status": "error",
+                "retry_count": max_retries
+            }
         
-        # 並發執行所有檢測任務
-        bounded_tasks = [bounded_detection(idx, task) for idx, task in detection_tasks]
-        logger.info(f"並發執行 {len(bounded_tasks)} 個OD/CD檢測任務，最大並發數: {n8n_service.max_concurrent_requests}")
+        # 為每個句子創建檢測任務
+        detection_tasks = []
+        for idx, sentence_data in enumerate(sentences_data):
+            task = detect_single_sentence_with_retry(idx, sentence_data)
+            detection_tasks.append(task)
         
-        detection_results = await asyncio.gather(*bounded_tasks, return_exceptions=True)
+        logger.info(f"並發執行 {len(detection_tasks)} 個OD/CD檢測任務，最大並發數: {n8n_service.max_concurrent_requests}")
+        
+        # 並發執行所有檢測任務，使用return_exceptions=True確保單個失敗不影響其他
+        detection_results = await asyncio.gather(*detection_tasks, return_exceptions=True)
         
         # 處理結果
-        results_map = {}
+        all_results = []
         successful_count = 0
+        error_count = 0
         
-        for result in detection_results:
+        for idx, result in enumerate(detection_results):
             if isinstance(result, Exception):
-                continue
-                
-            idx, success, analysis = result
-            results_map[idx] = (success, analysis)
-            if success and "error" not in analysis:
-                successful_count += 1
-        
-        # 合併結果
-        for idx, sentence_data in enumerate(sentences_data):
-            if idx in results_map:
-                success, analysis = results_map[idx]
-                
-                if success and "error" not in analysis:
-                    defining_type = analysis.get("defining_type", "UNKNOWN").upper()
-                    is_od_cd = defining_type in ["OD", "CD"]
-                    
-                    combined_result = {
-                        **sentence_data,
-                        "is_od_cd": is_od_cd,
-                        "confidence": 1.0 if is_od_cd else 0.0,
-                        "od_cd_type": defining_type,
-                        "explanation": analysis.get("reason", "")
-                    }
-                else:
-                    combined_result = {
-                        **sentence_data,
-                        "is_od_cd": False,
-                        "confidence": 0.0,
-                        "od_cd_type": "UNKNOWN",
-                        "explanation": f"分析失敗: {analysis.get('error', '未知錯誤')}"
-                    }
-            else:
-                # 如果沒有結果，當作失敗處理
+                # 如果任務本身拋出異常（不太可能，因為我們已經處理了所有異常）
+                logger.error(f"句子 {idx} 任務異常: {result}")
+                sentence_data = sentences_data[idx]
                 combined_result = {
                     **sentence_data,
                     "is_od_cd": False,
                     "confidence": 0.0,
-                    "od_cd_type": "UNKNOWN",
-                    "explanation": "未獲得檢測結果"
+                    "od_cd_type": "ERROR",
+                    "explanation": f"任務執行異常: {str(result)}",
+                    "detection_status": "error",
+                    "retry_count": 3
                 }
+                error_count += 1
+            else:
+                combined_result = result
+                if result.get("detection_status") == "success":
+                    successful_count += 1
+                elif result.get("detection_status") == "error":
+                    error_count += 1
             
             all_results.append(combined_result)
         
         detected_count = sum(1 for r in all_results if r.get("is_od_cd"))
-        logger.info(f"OD/CD 檢測完成，檢測到 {detected_count}/{len(all_results)} 個 OD/CD 句子")
+        
+        logger.info(f"OD/CD 檢測完成:")
+        logger.info(f"  - 總句子數: {len(all_results)}")
+        logger.info(f"  - 成功檢測: {successful_count}")
+        logger.info(f"  - 檢測失敗: {error_count}")
+        logger.info(f"  - OD/CD句子: {detected_count}")
         
         return all_results
     
@@ -502,109 +523,127 @@ class ProcessingService:
     
     async def _store_results(
         self,
-        file_id: str,
+        paper_id: str,
         grobid_result: Dict[str, Any],
         sections_analysis: List[Dict[str, Any]],
         sentences_data: List[Dict[str, Any]],
         od_cd_results: Optional[List[Dict[str, Any]]] = None,
         keyword_results: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
-        """存儲處理結果到資料庫"""
-        try:
-            cursor = await db_service.get_connection()
-            
-            # 更新檔案狀態
-            await cursor.execute(
-                """UPDATE files SET 
-                   status = 'processed',
-                   processed_at = CURRENT_TIMESTAMP,
-                   grobid_result = ?,
-                   processing_summary = ?
-                   WHERE file_id = ?""",
-                (
-                    json.dumps(grobid_result),
-                    json.dumps({
-                        "sections_count": len(sections_analysis),
-                        "sentences_count": len(sentences_data),
-                        "od_cd_count": len([s for s in (od_cd_results or []) if s.get("is_od_cd")]) if od_cd_results else 0,
-                        "keywords_count": sum(len(k["keywords"]) for k in (keyword_results or []))
-                    }),
-                    file_id
+        """使用SQLAlchemy ORM將處理結果存儲到資料庫"""
+        async with db_manager.async_session_maker() as session:
+            try:
+                # 1. 更新Paper記錄
+                paper_update_data = {
+                    "processing_status": "completed",
+                    "grobid_processed": True,
+                    "sentences_processed": True,
+                    "tei_xml": grobid_result.get("tei_xml"),
+                    "tei_metadata": {
+                        "title": grobid_result.get("title"),
+                        "authors": grobid_result.get("authors", []),
+                        "abstract": grobid_result.get("abstract"),
+                    },
+                    "processing_completed_at": datetime.now()
+                }
+                
+                await session.execute(
+                    update(Paper)
+                    .where(Paper.id == paper_id)
+                    .values(**paper_update_data)
                 )
-            )
-            
-            # 存儲章節數據
-            for section in sections_analysis:
-                await cursor.execute(
-                    """INSERT OR REPLACE INTO paper_sections 
-                       (file_id, section_id, title, content, section_type, word_count, section_order, analysis_data)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        file_id,
-                        section["section_id"],
-                        section["title"],
-                        section["content"],
-                        section["section_type"],
-                        section["word_count"],
-                        section.get("order", 0),
-                        json.dumps({
-                            "sentences_count": len(section["sentences"]),
-                            "summary": section["summary"],
-                            "key_points": section["key_points"]
+
+                # 2. 準備並批次插入章節 (PaperSection)
+                sections_to_insert = []
+                for section_data in sections_analysis:
+                    sections_to_insert.append({
+                        "id": section_data["section_id"],
+                        "paper_id": paper_id,
+                        "section_type": section_data["section_type"],
+                        "page_num": section_data.get("page"),
+                        "content": section_data["content"],
+                        "section_order": section_data.get("order"),
+                        "word_count": section_data.get("word_count"),
+                    })
+
+                if sections_to_insert:
+                    stmt = pg_insert(PaperSection).values(sections_to_insert)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=['id'],
+                        set_={
+                            "section_type": stmt.excluded.section_type,
+                            "page_num": stmt.excluded.page_num,
+                            "content": stmt.excluded.content,
+                            "section_order": stmt.excluded.section_order,
+                            "word_count": stmt.excluded.word_count,
+                        }
+                    )
+                    await session.execute(stmt)
+
+                # 3. 準備並批次插入句子 (Sentence)
+                sentences_to_insert = []
+                if od_cd_results:
+                    for sentence_data in od_cd_results:
+                        sentences_to_insert.append({
+                            "id": sentence_data["sentence_id"],
+                            "paper_id": paper_id,
+                            "section_id": sentence_data["section_id"],
+                            "sentence_text": sentence_data["sentence_text"],
+                            "page_num": sentence_data.get("page"),
+                            "sentence_order": sentence_data.get("order"),
+                            "defining_type": sentence_data.get("is_od_cd", "UNKNOWN"),
+                            "analysis_reason": sentence_data.get("reason"),
+                            "word_count": len(sentence_data["sentence_text"].split()),
+                            "confidence_score": sentence_data.get("confidence"),
+                            "detection_status": sentence_data.get("detection_status", "completed"),
+                            "error_message": sentence_data.get("error_message"),
+                            "retry_count": sentence_data.get("retry_count", 0),
+                            "explanation": sentence_data.get("explanation"),
                         })
+                
+                if sentences_to_insert:
+                    stmt = pg_insert(Sentence).values(sentences_to_insert)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=['id'],
+                        set_={
+                            "sentence_text": stmt.excluded.sentence_text,
+                            "page_num": stmt.excluded.page_num,
+                            "sentence_order": stmt.excluded.sentence_order,
+                            "defining_type": stmt.excluded.defining_type,
+                            "analysis_reason": stmt.excluded.analysis_reason,
+                            "word_count": stmt.excluded.word_count,
+                            "confidence_score": stmt.excluded.confidence_score,
+                            "detection_status": stmt.excluded.detection_status,
+                            "error_message": stmt.excluded.error_message,
+                            "retry_count": stmt.excluded.retry_count,
+                            "explanation": stmt.excluded.explanation,
+                        }
                     )
+                    await session.execute(stmt)
+
+                await session.commit()
+                
+                storage_result = {
+                    "stored_at": datetime.now().isoformat(),
+                    "sections_stored": len(sections_to_insert),
+                    "sentences_stored": len(sentences_to_insert),
+                    "keywords_stored": 0 # 關鍵詞存儲邏輯待實現
+                }
+                
+                logger.info(f"處理結果已存儲: {paper_id}")
+                return storage_result
+
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"存儲處理結果失敗: {paper_id} - {e}", exc_info=True)
+                # 更新Paper狀態為錯誤
+                await session.execute(
+                    update(Paper)
+                    .where(Paper.id == paper_id)
+                    .values(processing_status='error', error_message=f"Store results failed: {e}")
                 )
-            
-            # 存儲句子和 OD/CD 結果
-            if od_cd_results:
-                for sentence in od_cd_results:
-                    await cursor.execute(
-                        """INSERT OR REPLACE INTO paper_sentences
-                           (file_id, sentence_id, text, section_id, is_od_cd, od_cd_confidence, od_cd_type, position_in_section)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            file_id,
-                            sentence["sentence_id"],
-                            sentence["text"],
-                            sentence["section_id"],
-                            sentence.get("is_od_cd", False),
-                            sentence.get("confidence", 0.0),
-                            sentence.get("od_cd_type", ""),
-                            sentence.get("position_in_section", 0)
-                        )
-                    )
-            
-            # 存儲關鍵詞
-            if keyword_results:
-                for section_keywords in keyword_results:
-                    for keyword in section_keywords["keywords"]:
-                        await cursor.execute(
-                            """INSERT OR REPLACE INTO paper_keywords
-                               (file_id, section_id, keyword, extraction_confidence)
-                               VALUES (?, ?, ?, ?)""",
-                            (
-                                file_id,
-                                section_keywords["section_id"],
-                                keyword,
-                                section_keywords.get("extraction_confidence", 0.0)
-                            )
-                        )
-            
-            await cursor.commit()
-            
-            storage_result = {
-                "stored_at": datetime.now().isoformat(),
-                "sections_stored": len(sections_analysis),
-                "sentences_stored": len(od_cd_results) if od_cd_results else 0,
-                "keywords_stored": sum(len(k["keywords"]) for k in (keyword_results or []))
-            }
-            
-            logger.info(f"處理結果已存儲: {file_id}")
-            return storage_result
-            
-        except Exception as e:
-            logger.error(f"存儲處理結果失敗: {file_id} - {e}")
-            raise
+                await session.commit()
+                raise
     
     async def _cleanup_temp_files(self, file_info: Dict[str, Any]):
         """清理暫存檔案"""

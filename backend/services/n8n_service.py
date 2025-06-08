@@ -697,7 +697,7 @@ class N8NService:
         # API端點配置 (根據 n8n_api_document.md)
         self.endpoints = {
             'od_cd_detection': '/webhook/check-od-cd',
-            'keyword_extraction': '/webhook/421337df-0d97-47b4-a96b-a70a6c35d416',
+            'keyword_extraction': '/webhook/keyword-extraction',
             'intelligent_section_selection': '/webhook/intelligent-section-selection',
             'unified_content_analysis': '/webhook/unified-content-analysis',
             'enhanced_organization': '/webhook/enhanced-organize-response'
