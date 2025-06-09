@@ -350,6 +350,125 @@ async def get_paper_by_id(
     except Exception as e:
         raise handle_internal_error(f"取得論文失敗: {str(e)}")
 
+@router.get("/{paper_id}/sentences")
+async def get_paper_sentences(
+    paper_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """獲取論文的所有已處理句子"""
+    try:
+        # 驗證論文是否存在
+        paper = await db_service.get_paper_by_id(db, paper_id)
+        if not paper:
+            raise handle_not_found_error("論文不存在")
+        
+        # 直接從資料庫獲取句子資料，不使用 Pydantic 模型
+        from sqlalchemy import select
+        from ..models.paper import Sentence
+        
+        query = (
+            select(Sentence)
+            .where(Sentence.paper_id == paper_id)
+            .order_by(Sentence.section_id, Sentence.sentence_order)
+        )
+        result = await db.execute(query)
+        sentences = result.scalars().all()
+        
+        return {
+            "paper_id": paper_id,
+            "sentences": [
+                {
+                    "id": str(sentence.id),
+                    "content": sentence.sentence_text,
+                    "type": "UNKNOWN" if sentence.defining_type in [None, "", "NONE"] else sentence.defining_type,
+                    "reason": sentence.analysis_reason or sentence.explanation or "",
+                    "pageNumber": sentence.page_num,
+                    "fileName": paper.original_filename or paper.file_name,
+                    "fileId": paper_id,
+                    "sentenceOrder": sentence.sentence_order,
+                    "sectionId": str(sentence.section_id) if sentence.section_id else None,
+                    "confidence": float(sentence.confidence_score) if sentence.confidence_score else None,
+                    "wordCount": sentence.word_count
+                }
+                for sentence in sentences
+            ],
+            "total_count": len(sentences),
+            "processing_status": paper.processing_status
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise handle_internal_error(f"獲取論文句子失敗: {str(e)}")
+
+@router.get("/sentences/all")
+async def get_all_selected_papers_sentences(db: AsyncSession = Depends(get_db)):
+    """獲取所有已選取論文的句子資料"""
+    try:
+        # 直接從資料庫獲取所有已選取的論文，避免 Pydantic 模型問題
+        from sqlalchemy import select
+        from ..models.paper import Paper, PaperSelection
+        
+        query = (
+            select(Paper)
+            .join(PaperSelection, Paper.id == PaperSelection.paper_id)
+            .where(PaperSelection.is_selected == True)
+            .order_by(Paper.created_at.desc())
+        )
+        result = await db.execute(query)
+        selected_papers = result.scalars().all()
+        
+        if not selected_papers:
+            return {
+                "papers": [],
+                "total_sentences": 0,
+                "total_papers": 0
+            }
+        
+        all_sentences = []
+        
+        # 直接從資料庫獲取所有選取論文的句子
+        from ..models.paper import Sentence
+        
+        for paper in selected_papers:
+            query = (
+                select(Sentence)
+                .where(Sentence.paper_id == str(paper.id))
+                .order_by(Sentence.section_id, Sentence.sentence_order)
+            )
+            result = await db.execute(query)
+            sentences = result.scalars().all()
+            
+            for sentence in sentences:
+                all_sentences.append({
+                    "id": str(sentence.id),
+                    "content": sentence.sentence_text,
+                    "type": "UNKNOWN" if sentence.defining_type in [None, "", "NONE"] else sentence.defining_type,
+                    "reason": sentence.analysis_reason or sentence.explanation or "",
+                    "pageNumber": sentence.page_num,
+                    "fileName": paper.original_filename or paper.file_name,
+                    "fileId": str(paper.id),
+                    "sentenceOrder": sentence.sentence_order,
+                    "sectionId": str(sentence.section_id) if sentence.section_id else None,
+                    "confidence": float(sentence.confidence_score) if sentence.confidence_score else None,
+                    "wordCount": sentence.word_count
+                })
+        
+        return {
+            "sentences": all_sentences,
+            "total_sentences": len(all_sentences),
+            "total_papers": len(selected_papers),
+            "papers": [
+                {
+                    "id": str(paper.id),
+                    "fileName": paper.original_filename or paper.file_name,
+                    "processing_status": paper.processing_status
+                }
+                for paper in selected_papers
+            ]
+        }
+    except Exception as e:
+        raise handle_internal_error(f"獲取所有句子失敗: {str(e)}")
+
 @router.delete("/{paper_id}")
 async def delete_paper(
     paper_id: str,
