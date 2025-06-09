@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppStore } from '../stores/appStore';
 import LeftPanel from './LeftPanel';
 import CenterPanel from './CenterPanel';
@@ -7,11 +7,38 @@ import Modal from './common/Modal/Modal';
 import WelcomeTour from './onboarding/WelcomeTour';
 import { useFileStore } from '../stores/fileStore';
 import { ProcessedSentence } from '../types/file';
+import { paperService } from '../services/paper_service';
 
 const MainLayout: React.FC = () => {
   const { ui, setUI } = useAppStore();
   const { files } = useFileStore();
   const [highlightedSentence, setHighlightedSentence] = useState<ProcessedSentence | null>(null);
+  
+  // 應用啟動時初始化資料同步
+  useEffect(() => {
+    const initializeApp = async () => {
+      try {
+        console.log('Initializing app and checking for completed papers...');
+        
+        // 檢查是否有已完成處理的論文，如果有則同步句子資料
+        const hasCompleted = await paperService.hasAnyCompletedPapers();
+        
+        if (hasCompleted) {
+          console.log('Found completed papers, syncing sentence data...');
+          const sentencesData = await paperService.getAllSelectedPapersSentences();
+          
+          if (sentencesData.totalSentences > 0) {
+            console.log(`App initialization complete: ${sentencesData.totalSentences} sentences synced from ${sentencesData.totalPapers} papers`);
+          }
+        }
+      } catch (error) {
+        console.error('Error during app initialization:', error);
+        // 不阻止應用啟動，只記錄錯誤
+      }
+    };
+    
+    initializeApp();
+  }, []);
   
   // Resize handlers for panels
   const handleLeftPanelResize = (newWidth: number) => {
