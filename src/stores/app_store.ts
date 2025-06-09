@@ -4,6 +4,7 @@ import { ProcessingStage } from '../types/api';
 import { ProcessedSentence } from '../types/file';
 import { PaperInfo } from '../services/api_service';
 import { paperService } from '../services/paper_service';
+import { paperMonitorService } from '../services/paper_monitor_service';
 
 interface AppState {
   // UI 狀態
@@ -25,7 +26,7 @@ interface AppState {
     lastUpdated: number | null;
   };
   
-  // 進度狀態
+  // 進度狀態 (保留向後兼容性)
   progress: {
     currentStage: ProcessingStage;
     percentage: number;
@@ -33,6 +34,16 @@ interface AppState {
     isProcessing: boolean;
     error: string | null;
   };
+
+  // NEW: 任務追蹤 (基於 paper_id 而非 task_id)
+  activeTasks: Map<string, {
+    paperId: string;
+    fileName: string;
+    status: string;
+    progress: number;
+    stepName: string;
+    startTime: number;
+  }>;
 
   // 引用句子
   selectedReferences: ProcessedSentence[];
@@ -52,6 +63,13 @@ interface AppState {
   setProgress: (updates: Partial<AppState['progress']>) => void;
   resetProgress: () => void;
   setSelectedReferences: (references: ProcessedSentence[]) => void;
+  
+  // NEW: Paper-based 任務管理動作
+  addTask: (paperId: string, fileName: string) => void;
+  updateTaskProgress: (paperId: string, progress: number, stepName: string, status: string) => void;
+  removeTask: (paperId: string) => void;
+  startPaperMonitoring: (paperId: string) => void;
+  stopPaperMonitoring: (paperId: string) => void;
   
   // 論文管理動作
   refreshPapers: () => Promise<void>;
@@ -97,6 +115,8 @@ export const useAppStore = create<AppState>()(
           isProcessing: false,
           error: null,
         },
+
+        activeTasks: new Map(),
         
         selectedReferences: [],
         
@@ -131,6 +151,115 @@ export const useAppStore = create<AppState>()(
         setSelectedReferences: (references) => set({
           selectedReferences: references
         }),
+
+        // NEW: Paper-based 任務管理動作
+        addTask: (paperId: string, fileName: string) => {
+          const state = get();
+          const newTasks = new Map(state.activeTasks);
+          newTasks.set(paperId, {
+            paperId,
+            fileName,
+            status: 'pending',
+            progress: 0,
+            stepName: '準備中...',
+            startTime: Date.now(),
+          });
+          set({ activeTasks: newTasks });
+        },
+
+        updateTaskProgress: (paperId: string, progress: number, stepName: string, status: string) => {
+          const state = get();
+          const newTasks = new Map(state.activeTasks);
+          const task = newTasks.get(paperId);
+          if (task) {
+            newTasks.set(paperId, {
+              ...task,
+              progress,
+              stepName,
+              status,
+            });
+            set({ activeTasks: newTasks });
+          }
+        },
+
+        removeTask: (paperId: string) => {
+          const state = get();
+          const newTasks = new Map(state.activeTasks);
+          newTasks.delete(paperId);
+          set({ activeTasks: newTasks });
+        },
+
+        startPaperMonitoring: (paperId: string) => {
+          const actions = get();
+          const task = actions.activeTasks.get(paperId);
+          if (!task) return;
+          
+          paperMonitorService.startMonitoring(paperId, {
+            onProgress: (status) => {
+              // 更新任務進度
+              actions.updateTaskProgress(
+                paperId,
+                status.progress?.percentage ?? 0,
+                status.progress?.step_name ?? '處理中...',
+                status.status
+              );
+              
+              // 更新全局進度狀態以保持向後兼容性
+              actions.setProgress({
+                currentStage: 'analyzing',
+                percentage: status.progress?.percentage ?? 0,
+                details: {
+                  stepName: status.progress?.step_name,
+                  ...(typeof status.progress?.details === 'object' && status.progress?.details ? status.progress.details as Record<string, unknown> : {})
+                },
+                isProcessing: true,
+                error: null
+              });
+            },
+            onComplete: (status) => {
+              // 任務完成
+              actions.updateTaskProgress(paperId, 100, '處理完成', 'completed');
+              setTimeout(() => actions.removeTask(paperId), 2000);
+              
+              // 重新載入論文列表以獲取最新狀態
+              actions.refreshPapers();
+              
+              // 重置進度狀態
+              actions.setProgress({
+                currentStage: 'completed',
+                percentage: 100,
+                details: { 
+                  message: '檔案處理完成！',
+                  paperId: status.paper_id
+                },
+                isProcessing: false,
+                error: null
+              });
+              
+              console.log(`Paper processing completed: ${paperId}`);
+            },
+            onError: (error) => {
+              // 任務失敗
+              actions.updateTaskProgress(paperId, 0, '處理失敗', 'error');
+              setTimeout(() => actions.removeTask(paperId), 5000);
+              
+              // 設置錯誤狀態
+              actions.setProgress({
+                currentStage: 'error',
+                percentage: 0,
+                details: { message: error },
+                isProcessing: false,
+                error: error
+              });
+              
+              console.error(`Paper processing failed: ${paperId}`, error);
+            }
+          });
+        },
+
+        stopPaperMonitoring: (paperId: string) => {
+          paperMonitorService.stopMonitoring(paperId);
+        },
         
         // 論文管理動作
         refreshPapers: async () => {
@@ -159,14 +288,24 @@ export const useAppStore = create<AppState>()(
         
         uploadPaper: async (file: File) => {
           const state = get();
+          const actions = get();
           set({ ui: { ...state.ui, isLoading: true, errorMessage: null } });
           
           try {
-                         const result = await paperService.uploadPdf(file);
+            const result = await paperService.uploadPdf(file);
             
             if (result.success) {
+              const { file_id, duplicate } = result;
+              
+              // 如果是新檔案，開始監控進度
+              if (file_id && !duplicate) {
+                actions.addTask(file_id, file.name);
+                actions.startPaperMonitoring(file_id);
+              }
+              
               // 刷新論文列表
               await get().refreshPapers();
+              set({ ui: { ...state.ui, isLoading: false } });
               return { success: true };
             } else {
               set({

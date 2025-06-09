@@ -11,8 +11,10 @@ import { Message } from '../types/chat';
 export interface PaperUploadResult {
   success: boolean;
   file_id?: string;
+  task_id?: string;
   message?: string;
   error?: string;
+  duplicate?: boolean;
 }
 
 export interface PaperProcessingResult {
@@ -85,7 +87,9 @@ class PaperService {
       return {
         success: true,
         file_id: uploadResult.data.paper_id,
+        task_id: uploadResult.data.task_id,
         message: uploadResult.data.message,
+        duplicate: uploadResult.data.duplicate,
       };
     } catch (error) {
       return {
