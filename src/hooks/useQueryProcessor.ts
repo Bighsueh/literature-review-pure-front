@@ -6,7 +6,7 @@ import { useFileStore } from '../stores/fileStore';
 import { useChatStore } from '../stores/chatStore';
 import { n8nAPI } from '../services/n8nAPI';
 import { ProcessedSentence } from '../types/file';
-import { Message, Conversation } from '../types/chat';
+import { Message, Conversation, Reference } from '../types/chat';
 
 export const useQueryProcessor = () => {
   const { setProgress, setSelectedReferences } = useAppStore();
@@ -156,8 +156,19 @@ export const useQueryProcessor = () => {
         isProcessing: true
       });
 
-      // 只保留 OD 和 CD 類型的句子作為引用
-      const validReferences = [...odSentences, ...cdSentences];
+              // 只保留 OD 和 CD 類型的句子
+        const validSentences = [...odSentences, ...cdSentences];
+        
+        // 將處理後的句子轉換為 Reference 格式
+        const validReferences: Reference[] = validSentences.map(sentence => ({
+          id: sentence.id,
+          paper_name: sentence.fileName || '未知檔案',
+          section_type: 'unknown', // ProcessedSentence 沒有 section_type，設為預設值
+          page_num: sentence.pageNumber || 1,
+          content_snippet: sentence.content.length > 200 
+            ? sentence.content.substring(0, 200) + '...' 
+            : sentence.content
+        }));
 
       const systemMessage: Message = {
         id: uuidv4(),
@@ -181,7 +192,7 @@ export const useQueryProcessor = () => {
         details: '處理完成！',
         isProcessing: false
       });
-      setSelectedReferences(validReferences || []);
+      setSelectedReferences(validSentences || []);
 
     } catch (error) {
       console.error('Error in processQuery:', error);
