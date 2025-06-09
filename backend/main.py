@@ -65,6 +65,11 @@ async def lifespan(app: FastAPI):
         os.makedirs(settings.temp_files_dir, exist_ok=True)
         logger.info(f"暫存檔案目錄已準備: {settings.temp_files_dir}")
         
+        # 初始化處理服務 (會自動註冊任務處理器)
+        from .services.processing_service import ProcessingService
+        processing_service = ProcessingService()
+        logger.info("檔案處理服務已初始化")
+        
         # 啟動佇列處理服務
         from .services.queue_service import queue_service
         await queue_service.start_workers()

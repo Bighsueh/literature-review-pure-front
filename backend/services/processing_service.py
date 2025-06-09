@@ -6,6 +6,7 @@
 import asyncio
 import time
 import json
+import uuid
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import os
@@ -100,7 +101,107 @@ class ProcessingService:
         return task_id
     
     async def _process_file(self, task: QueueTask) -> Dict[str, Any]:
-        """檔案處理主流程"""
+        """
+        檔案處理主流程 (可恢復)
+        協調各個處理步驟，並允許從失敗點恢復
+        """
+        file_id = task.data["file_id"]
+        options = task.data["options"]
+        logger.info(f"開始處理檔案 (可恢復流程): {file_id}")
+
+        session = await db_manager.get_async_session()
+        try:
+            # 獲取最新的論文狀態
+            paper = await db_service.get_paper_by_id(session, file_id)
+            if not paper:
+                raise ValueError(f"處理開始時找不到論文記錄: {file_id}")
+
+            # 步驟 1: Grobid TEI 解析
+            if not paper.grobid_processed:
+                await queue_service.update_progress(task.task_id, step_name="Grobid TEI 解析")
+                file_info = await self._validate_file(file_id)
+                grobid_result = await self._process_with_grobid(file_info)
+                
+                # 增量儲存 Grobid 結果
+                await db_service.update_paper_grobid_results(
+                    session,
+                    paper_id=file_id,
+                    grobid_result=grobid_result,
+                    status="processing"
+                )
+                await session.commit()
+                paper = await db_service.get_paper_by_id(session, file_id)
+                logger.info(f"[進度] Grobid 處理完成並已儲存: {file_id}")
+            
+            # 步驟 2: 章節與句子提取
+            if not paper.sentences_processed:
+                await queue_service.update_progress(task.task_id, step_name="章節與句子提取")
+                grobid_xml = paper.tei_xml
+                if not grobid_xml:
+                    raise ValueError(f"無法從資料庫獲取 TEI XML: {file_id}")
+                
+                # 使用 grobid_service 解析 XML 以獲取章節
+                sections = await grobid_service.parse_sections_from_xml(grobid_xml)
+                grobid_result_mock = {"sections": sections}
+
+                sections_analysis = await self._analyze_sections(grobid_result_mock, options)
+                sentences_data = await self._extract_sentences(sections_analysis)
+                
+                # 增量儲存章節與句子
+                await db_service.save_sections_and_sentences(
+                    session,
+                    paper_id=file_id,
+                    sections_analysis=sections_analysis,
+                    sentences_data=sentences_data,
+                )
+                await session.commit()
+                paper = await db_service.get_paper_by_id(session, file_id)
+                logger.info(f"[進度] 章節與句子提取完成並已儲存: {file_id}")
+            
+            # 步驟 3: OD/CD 檢測
+            if not paper.od_cd_processed and options.get("detect_od_cd", True):
+                await queue_service.update_progress(task.task_id, step_name="OD/CD 檢測")
+                all_sentences = await db_service.get_sentences_for_paper(session, file_id)
+                
+                od_cd_results = await self._detect_od_cd(all_sentences, {}) # grobid_result 在此不需要
+                
+                # 增量儲存 OD/CD 結果
+                await db_service.save_od_cd_results(
+                    session,
+                    paper_id=file_id,
+                    od_cd_results=od_cd_results
+                )
+                await session.commit()
+                logger.info(f"[進度] OD/CD 檢測完成並已儲存: {file_id}")
+            
+            # 步驟 4: 最終處理與清理
+            await queue_service.update_progress(task.task_id, step_name="完成處理")
+            
+            # 更新最終狀態
+            await db_service.update_paper_status(session, file_id, "completed")
+            
+            # 清理暫存檔案
+            file_info = await self._validate_file(file_id) # 重新驗證以獲取路徑
+            await self._cleanup_temp_files(file_info)
+
+            logger.info(f"檔案處理完成: {file_id}")
+            return {"status": "completed", "file_id": file_id}
+
+        except Exception as e:
+            logger.error(f"檔案處理失敗: {file_id} - {e}", exc_info=True)
+            # 在單獨的會話中更新錯誤狀態，以防主會話已回滾
+            error_session = await db_manager.get_async_session()
+            try:
+                await db_service.update_paper_status(error_session, file_id, "error", str(e))
+                await error_session.commit()
+            finally:
+                await error_session.close()
+            raise
+        finally:
+            await session.close()
+    
+    async def _process_file_legacy(self, task: QueueTask) -> Dict[str, Any]:
+        """檔案處理主流程 (舊版，單體式)"""
         file_id = task.data["file_id"]
         options = task.data["options"]
         
@@ -235,35 +336,94 @@ class ProcessingService:
         
         # 創建一個新的資料庫會話來獲取檔案資訊
         async with AsyncSessionLocal() as db:
-            paper = await db_service.get_paper_by_id(db, file_id)
+            try:
+                paper = await db_service.get_paper_by_id(db, file_id)
+                
+                if not paper:
+                    # 記錄詳細錯誤信息並檢查是否為重複任務
+                    logger.error(f"檔案記錄不存在於資料庫: {file_id}")
+                    logger.error(f"可能原因: 1) 記錄已被刪除 2) ID錯誤 3) 資料庫事務問題")
+                    
+                    # 停止相關的重複任務
+                    await self._cleanup_failed_task(file_id)
+                    raise ValueError(f"檔案記錄不存在於資料庫: {file_id}")
+                
+                # 檢查論文狀態
+                if paper.processing_status == "error":
+                    logger.warning(f"檔案狀態為錯誤，停止處理: {file_id} - {paper.error_message}")
+                    await self._cleanup_failed_task(file_id)
+                    raise ValueError(f"檔案狀態為錯誤: {paper.error_message}")
+                
+                # 構建檔案路徑（假設檔案存儲在暫存目錄中）
+                file_path = os.path.join(settings.temp_files_dir, paper.file_name)
+                
+                if not os.path.exists(file_path):
+                    logger.error(f"檔案實體不存在: {file_path}")
+                    logger.error(f"Paper記錄: file_name={paper.file_name}, status={paper.processing_status}")
+                    
+                    # 列出 temp_files 目錄內容用於調試
+                    try:
+                        files = os.listdir(settings.temp_files_dir)
+                        logger.error(f"temp_files 目錄內容 (前10個): {files[:10]}")
+                    except Exception as e:
+                        logger.error(f"無法列出 temp_files 目錄: {e}")
+                    
+                    # 更新資料庫狀態為錯誤
+                    await db_service.update_paper_status(
+                        db, file_id, "error", f"檔案實體不存在: {file_path}"
+                    )
+                    await self._cleanup_failed_task(file_id)
+                    raise ValueError(f"檔案實體不存在: {file_path}")
+                
+                # 構建檔案資訊字典，與原 file_service 格式相容
+                file_info = {
+                    "file_id": file_id,
+                    "file_path": file_path,
+                    "filename": paper.file_name,
+                    "original_filename": paper.original_filename,
+                    "file_size": paper.file_size,
+                    "status": "uploaded" if paper.processing_status in ["uploading", "uploaded"] else paper.processing_status,
+                    "created_time": paper.created_at,
+                    "modified_time": paper.upload_timestamp
+                }
+                
+                logger.debug(f"檔案驗證通過: {file_id}")
+                return file_info
+                
+            except ValueError:
+                # 重新拋出我們的業務邏輯錯誤
+                raise
+            except Exception as e:
+                logger.error(f"檔案驗證時發生未預期錯誤: {file_id} - {e}")
+                await self._cleanup_failed_task(file_id)
+                raise ValueError(f"檔案驗證失敗: {str(e)}")
+    
+    async def _cleanup_failed_task(self, file_id: str):
+        """清理失敗的任務，防止無限重試"""
+        try:
+            # 1. 停止相關的重試任務
+            logger.info(f"清理失敗任務: {file_id}")
             
-            if not paper:
-                raise ValueError(f"檔案不存在: {file_id}")
+            # 清理佇列中的失敗任務
+            from .queue_service import queue_service
+            await queue_service.cleanup_failed_tasks(file_id)
             
-            # 檢查論文狀態
-            if paper.processing_status == "error":
-                raise ValueError(f"檔案狀態為錯誤: {paper.error_message}")
+            # 2. 更新資料庫狀態（如果記錄存在）
+            from ..core.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as db:
+                try:
+                    await db_service.update_paper_status(
+                        db, file_id, "error", "處理失敗，任務已停止"
+                    )
+                    logger.info(f"已更新論文狀態為錯誤: {file_id}")
+                except Exception as e:
+                    logger.warning(f"無法更新論文狀態: {file_id} - {e}")
             
-            # 構建檔案路徑（假設檔案存儲在暫存目錄中）
-            file_path = os.path.join(settings.temp_files_dir, paper.file_name)
+            # 3. 清理相關資源 (如果需要的話)
+            # 例如：清理暫存檔案、停止相關服務等
             
-            if not os.path.exists(file_path):
-                raise ValueError(f"檔案實體不存在: {file_path}")
-            
-            # 構建檔案資訊字典，與原 file_service 格式相容
-            file_info = {
-                "file_id": file_id,
-                "file_path": file_path,
-                "filename": paper.file_name,
-                "original_filename": paper.original_filename,
-                "file_size": paper.file_size,
-                "status": "uploaded" if paper.processing_status in ["uploading", "uploaded"] else paper.processing_status,
-                "created_time": paper.created_at,
-                "modified_time": paper.upload_timestamp
-            }
-            
-            logger.debug(f"檔案驗證通過: {file_id}")
-            return file_info
+        except Exception as e:
+            logger.error(f"清理失敗任務時發生錯誤: {file_id} - {e}")
     
     async def _process_with_grobid(self, file_info: Dict[str, Any]) -> Dict[str, Any]:
         """使用 Grobid 處理檔案"""
@@ -294,8 +454,15 @@ class ProcessingService:
         analyzed_sections = []
         
         for section in sections:
+            # 如果原始的section_id不是UUID格式，生成新的UUID
+            original_section_id = section.get("section_id", "")
+            if original_section_id and len(original_section_id) < 32:  # 不是UUID格式
+                section_id = str(uuid.uuid4())
+            else:
+                section_id = original_section_id or str(uuid.uuid4())
+                
             section_analysis = {
-                "section_id": section.get("section_id", ""),
+                "section_id": section_id,
                 "title": section.get("title", ""),
                 "content": section.get("content", ""),
                 "section_type": section.get("section_type", "other"),
@@ -346,7 +513,6 @@ class ProcessingService:
     async def _extract_sentences(self, sections_analysis: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """提取所有句子"""
         sentences_data = []
-        sentence_id = 1
         
         for section in sections_analysis:
             section_id = section["section_id"]
@@ -355,7 +521,7 @@ class ProcessingService:
             for sentence_text in section["sentences"]:
                 if len(sentence_text.strip()) > 10:  # 過濾太短的句子
                     sentences_data.append({
-                        "sentence_id": f"sent_{sentence_id:06d}",
+                        "sentence_id": str(uuid.uuid4()),
                         "text": sentence_text.strip(),
                         "section_id": section_id,
                         "section_title": section_title,
@@ -363,7 +529,6 @@ class ProcessingService:
                         "word_count": len(sentence_text.split()),
                         "position_in_section": len([s for s in sentences_data if s.get("section_id") == section_id])
                     })
-                    sentence_id += 1
         
         logger.info(f"句子提取完成，總共 {len(sentences_data)} 個句子")
         return sentences_data
@@ -531,7 +696,7 @@ class ProcessingService:
         keyword_results: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """使用SQLAlchemy ORM將處理結果存儲到資料庫"""
-        async with db_manager.async_session_maker() as session:
+        async with db_manager.get_async_session() as session:
             try:
                 # 1. 更新Paper記錄
                 paper_update_data = {
