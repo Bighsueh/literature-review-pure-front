@@ -15,6 +15,7 @@ CREATE TABLE papers (
     file_hash VARCHAR(64) UNIQUE, -- 用於檔案去重
     grobid_processed BOOLEAN DEFAULT FALSE,
     sentences_processed BOOLEAN DEFAULT FALSE,
+    od_cd_processed BOOLEAN DEFAULT FALSE,
     pdf_deleted BOOLEAN DEFAULT FALSE, -- 標記PDF是否已刪除
     error_message TEXT,
     -- TEI XML 儲存 (新增)
@@ -107,10 +108,10 @@ CREATE INDEX idx_selections_paper ON paper_selections(paper_id);
 
 -- 插入初始系統設定
 INSERT INTO system_settings (setting_key, setting_value, description) VALUES
-('system_version', '"1.0.0"', '系統版本'),
-('max_file_size_mb', '50', '最大上傳檔案大小(MB)'),
-('batch_processing_size', '10', '批次處理句子數量'),
-('auto_cleanup_hours', '24', '自動清理暫存檔案時間(小時)')
+('system_version', '"1.0.0"'::jsonb, '系統版本'),
+('max_file_size_mb', '50'::jsonb, '最大上傳檔案大小(MB)'),
+('batch_processing_size', '10'::jsonb, '批次處理句子數量'),
+('auto_cleanup_hours', '24'::jsonb, '自動清理暫存檔案時間(小時)')
 ON CONFLICT (setting_key) DO NOTHING;
 
 -- 建立觸發器：自動更新 updated_at
