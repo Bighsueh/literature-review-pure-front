@@ -163,26 +163,42 @@ async def batch_select_papers(
 
 # ===== 處理狀態管理 =====
 
-@router.get("/{paper_id}/status")
-async def get_processing_status(
-    paper_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """取得論文處理狀態"""
-    try:
-        paper = await db_service.get_paper_by_id(db, paper_id)
-        if not paper:
-            raise handle_not_found_error("論文不存在")
-        
-        return {
-            "success": True,
-            "status": paper.processing_status,
-            "message": paper.error_message if paper.error_message else "處理中..."
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise handle_internal_error(f"取得處理狀態失敗: {str(e)}")
+@router.get(
+    "/{paper_id}/status",
+    summary="獲取論文處理狀態",
+    description="根據論文ID獲取其最新的處理狀態，取代舊的 task-based API"
+)
+async def get_paper_status(paper_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    獲取論文處理的詳細狀態。
+    這是新的、可靠的狀態查詢端點。
+    """
+    # 1. 直接從資料庫這個"單一事實來源"查詢
+    paper = await db_service.get_paper_by_id(db, paper_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="論文不存在")
+
+    # 2. 如果仍在處理中，嘗試從 queue_service 獲取更詳細的即時進度
+    if paper.processing_status == "processing":
+        active_task = await queue_service.find_task_by_file_id(paper_id)
+        if active_task:
+            return {
+                "status": "processing",
+                "paper_id": str(paper.id),
+                "progress": active_task.progress.to_dict() if active_task.progress else None,
+                "task_id": active_task.task_id
+            }
+
+    # 3. 對於所有最終狀態（完成、錯誤）或其他狀態，直接返回資料庫中的權威狀態
+    return {
+        "status": paper.processing_status,
+        "paper_id": str(paper.id),
+        "progress": {
+            "percentage": 100.0,
+            "step_name": "完成" if paper.processing_status == "completed" else "失敗"
+        },
+        "error_message": paper.error_message
+    }
 
 @router.post("/{paper_id}/retry")
 async def retry_processing(

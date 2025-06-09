@@ -106,6 +106,103 @@ class DatabaseService:
         await db.commit()
         return result.rowcount > 0
     
+    async def update_paper_grobid_results(self, db: AsyncSession, paper_id: str, grobid_result: Dict[str, Any], status: str = "processing"):
+        """保存 Grobid 處理結果並更新狀態"""
+        update_data = {
+            "processing_status": status,
+            "grobid_processed": True,
+            "tei_xml": grobid_result.get("tei_xml"),
+            "tei_metadata": {
+                "title": grobid_result.get("title"),
+                "authors": grobid_result.get("authors", []),
+                "abstract": grobid_result.get("abstract"),
+            },
+        }
+        await db.execute(
+            update(Paper).where(Paper.id == paper_id).values(**update_data)
+        )
+        # No commit here, part of a larger transaction
+
+    async def get_paper_tei_xml(self, db: AsyncSession, paper_id: str) -> Optional[str]:
+        """從資料庫獲取 TEI XML"""
+        query = select(Paper.tei_xml).where(Paper.id == paper_id)
+        result = await db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def save_sections_and_sentences(self, db: AsyncSession, paper_id: str, sections_analysis: List[Dict[str, Any]], sentences_data: List[Dict[str, Any]], status: str = "processing"):
+        """保存章節和句子資料"""
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        # 1. 批次插入章節
+        sections_to_insert = [
+            {
+                "id": s["section_id"], "paper_id": paper_id, "section_type": s["section_type"],
+                "content": s["content"], "section_order": s.get("order"), "word_count": s.get("word_count")
+            } for s in sections_analysis
+        ]
+        if sections_to_insert:
+            stmt = pg_insert(PaperSection).values(sections_to_insert)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['id'],
+                set_={k: getattr(stmt.excluded, k) for k in sections_to_insert[0] if k != 'id'}
+            )
+            await db.execute(stmt)
+
+        # 2. 批次插入句子
+        sentences_to_insert = [
+            {
+                "id": s["sentence_id"], "paper_id": paper_id, "section_id": s["section_id"],
+                "sentence_text": s["text"], "word_count": s.get("word_count")
+            } for s in sentences_data
+        ]
+        if sentences_to_insert:
+            stmt = pg_insert(Sentence).values(sentences_to_insert)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['id'],
+                set_={k: getattr(stmt.excluded, k) for k in sentences_to_insert[0] if k != 'id'}
+            )
+            await db.execute(stmt)
+
+        # 3. 更新論文狀態
+        await db.execute(
+            update(Paper).where(Paper.id == paper_id).values(
+                sentences_processed=True, processing_status=status
+            )
+        )
+        # No commit here
+
+    async def get_sentences_for_paper(self, db: AsyncSession, paper_id: str) -> List[Dict[str, Any]]:
+        """獲取論文的所有句子以進行 OD/CD 分析"""
+        query = select(Sentence).where(Sentence.paper_id == paper_id)
+        result = await db.execute(query)
+        return [
+            {
+                "id": str(s.id), "text": s.sentence_text, "section_id": str(s.section_id)
+            } for s in result.scalars().all()
+        ]
+
+    async def save_od_cd_results(self, db: AsyncSession, paper_id: str, od_cd_results: List[Dict[str, Any]], status: str = "processing"):
+        """增量更新句子的 OD/CD 分析結果"""
+        update_statements = [
+            update(Sentence).where(Sentence.id == result['id']).values(
+                defining_type=result.get("od_cd_type", "UNKNOWN"),
+                analysis_reason=result.get("explanation", ""),
+                confidence_score=result.get("confidence", 0.0),
+                detection_status=result.get("detection_status", "success")
+            ) for result in od_cd_results
+        ]
+        if update_statements:
+            for stmt in update_statements:
+                await db.execute(stmt)
+
+        # 更新論文主記錄狀態
+        await db.execute(
+            update(Paper).where(Paper.id == paper_id).values(
+                od_cd_processed=True, processing_status=status
+            )
+        )
+        # No commit here
+
     async def delete_paper(self, db: AsyncSession, paper_id: str) -> bool:
         """刪除論文及其所有相關資料"""
         try:

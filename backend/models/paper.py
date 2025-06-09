@@ -25,6 +25,7 @@ class Paper(Base):
     file_hash = Column(String(64), unique=True)
     grobid_processed = Column(Boolean, default=False)
     sentences_processed = Column(Boolean, default=False)
+    od_cd_processed = Column(Boolean, default=False)
     pdf_deleted = Column(Boolean, default=False)
     error_message = Column(Text)
     tei_xml = Column(Text)
@@ -146,6 +147,7 @@ class PaperUpdate(BaseModel):
     processing_status: Optional[ProcessingStatusEnum] = None
     grobid_processed: Optional[bool] = None
     sentences_processed: Optional[bool] = None
+    od_cd_processed: Optional[bool] = None
     pdf_deleted: Optional[bool] = None
     error_message: Optional[str] = None
     tei_xml: Optional[str] = None
@@ -158,6 +160,7 @@ class PaperResponse(PaperBase):
     processing_status: ProcessingStatusEnum
     grobid_processed: bool
     sentences_processed: bool
+    od_cd_processed: bool
     pdf_deleted: bool
     error_message: Optional[str] = None
     processing_completed_at: Optional[datetime] = None

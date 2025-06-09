@@ -82,7 +82,7 @@ async def upload_file(
             priority=TaskPriority.HIGH,  # 上傳的檔案給高優先級
             options={
                 "detect_od_cd": True,
-                "extract_keywords": True,
+                "extract_keywords": False,  # 根據流程圖，上傳不包含關鍵詞提取
                 "auto_cleanup": True
             }
         )
@@ -179,7 +179,7 @@ async def upload_multiple_files(
                     priority=TaskPriority.NORMAL,  # 批量上傳使用一般優先級
                     options={
                         "detect_od_cd": True,
-                        "extract_keywords": True,
+                        "extract_keywords": False,  # 根據流程圖，上傳不包含關鍵詞提取
                         "auto_cleanup": True
                     }
                 )

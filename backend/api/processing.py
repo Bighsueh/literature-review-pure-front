@@ -52,16 +52,16 @@ def parse_priority(priority_str: str) -> TaskPriority:
 # ===== 檔案處理端點 =====
 
 @router.post("/process-file")
-async def process_file(request: ProcessFileRequest):
+async def process_file(request: ProcessFileRequest, db: AsyncSession = Depends(get_db)):
     """開始處理單個檔案"""
     try:
-        # 驗證檔案存在
-        file_info = await file_service.get_file_info(request.file_id)
-        if not file_info:
+        # 驗證檔案存在於資料庫
+        paper = await db_service.get_paper_by_id(db, request.file_id)
+        if not paper:
             raise HTTPException(status_code=404, detail="檔案不存在")
         
         # 檢查檔案狀態
-        if file_info.get("status") == "processed":
+        if paper.processing_status == "completed":
             return {
                 "message": "檔案已處理完成",
                 "file_id": request.file_id,

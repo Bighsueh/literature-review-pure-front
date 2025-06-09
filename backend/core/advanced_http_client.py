@@ -116,16 +116,13 @@ class AdvancedHTTPClient:
                 keepalive_timeout=self.pool_config.keepalive_timeout,
                 enable_cleanup_closed=self.pool_config.enable_cleanup_closed,
                 ttl_dns_cache=self.pool_config.ttl_dns_cache,
-                use_dns_cache=True,
-                # 進階TCP配置
-                sock_connect=self.pool_config.timeout_socket_connect,
-                sock_read=self.pool_config.timeout_sock_read
+                use_dns_cache=True
             )
             
             # 創建session
             timeout = aiohttp.ClientTimeout(
-                total=None,  # 不設全局超時
-                sock_connect=self.pool_config.timeout_socket_connect,
+                total=60,  # 設置合理的全局超時
+                connect=self.pool_config.timeout_socket_connect,
                 sock_read=self.pool_config.timeout_sock_read
             )
             
