@@ -38,6 +38,10 @@ class PaperMonitorService {
           
           if (status.status === 'completed') {
             this.stopMonitoring(paperId);
+            
+            // 論文處理完成時，嘗試同步句子資料
+            await this.syncPaperDataOnCompletion(paperId);
+            
             callbacks.onComplete(status);
           } else if (status.status === 'error') {
             this.stopMonitoring(paperId);
@@ -62,6 +66,35 @@ class PaperMonitorService {
     });
 
     console.log(`Started monitoring paper: ${paperId}`);
+  }
+
+  /**
+   * 論文處理完成時同步資料
+   */
+  private async syncPaperDataOnCompletion(paperId: string): Promise<void> {
+    try {
+      console.log(`Syncing data for completed paper: ${paperId}`);
+      
+      // 導入 paperService（動態導入避免循環依賴）
+      const { paperService } = await import('./paper_service');
+      
+      // 同步論文句子資料到前端
+      const sentences = await paperService.syncPaperSentencesFromBackend(paperId);
+      
+      if (sentences.length > 0) {
+        console.log(`Successfully synced ${sentences.length} sentences for paper ${paperId}`);
+        
+        // 觸發全局狀態更新（如果有其他組件在監聽）
+        window.dispatchEvent(new CustomEvent('paperDataSynced', {
+          detail: { paperId, sentencesCount: sentences.length }
+        }));
+      } else {
+        console.warn(`No sentences found for completed paper ${paperId}`);
+      }
+    } catch (error) {
+      console.error(`Error syncing data for paper ${paperId}:`, error);
+      // 不拋出錯誤，避免影響完成回調
+    }
   }
 
   /**

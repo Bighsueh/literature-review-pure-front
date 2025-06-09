@@ -325,7 +325,134 @@ class PaperService {
   }
 
   /**
-   * 保存處理後的句子
+   * 從後端獲取論文句子資料並同步到前端狀態
+   */
+  async syncPaperSentencesFromBackend(paperId: string): Promise<ProcessedSentence[]> {
+    try {
+      const result = await apiService.getPaperSentences(paperId);
+      
+      if (result.success && result.data) {
+        // 轉換後端資料格式為前端格式
+        const sentences: ProcessedSentence[] = result.data.sentences.map(sentence => ({
+          id: sentence.id,
+          content: sentence.content,
+          type: sentence.type as 'OD' | 'CD' | 'OTHER' | 'UNKNOWN',
+          reason: sentence.reason || '',
+          pageNumber: sentence.pageNumber || 1,
+          fileName: sentence.fileName,
+          fileId: sentence.fileId,
+          sentenceOrder: sentence.sentenceOrder,
+          sectionId: sentence.sectionId,
+          confidence: sentence.confidence,
+          wordCount: sentence.wordCount
+        }));
+        
+        // 同步到本地儲存
+        await localStorageService.saveSentences(sentences);
+        
+        this.triggerRefresh();
+        return sentences;
+      }
+      
+      console.warn('Failed to sync sentences from backend:', result.error);
+      return [];
+    } catch (error) {
+      console.error('Error syncing sentences from backend:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 獲取所有已選取論文的句子資料（從後端獲取）
+   */
+  async getAllSelectedPapersSentences(): Promise<{
+    sentences: ProcessedSentence[];
+    totalSentences: number;
+    totalPapers: number;
+    papers: Array<{ id: string; fileName: string; processingStatus: string }>;
+  }> {
+    try {
+      const result = await apiService.getAllSelectedPapersSentences();
+      
+      if (result.success && result.data) {
+        // 轉換後端資料格式為前端格式
+        const sentences: ProcessedSentence[] = result.data.sentences.map(sentence => ({
+          id: sentence.id,
+          content: sentence.content,
+          type: sentence.type as 'OD' | 'CD' | 'OTHER' | 'UNKNOWN',
+          reason: sentence.reason || '',
+          pageNumber: sentence.pageNumber || 1,
+          fileName: sentence.fileName,
+          fileId: sentence.fileId,
+          sentenceOrder: sentence.sentenceOrder,
+          sectionId: sentence.sectionId,
+          confidence: sentence.confidence,
+          wordCount: sentence.wordCount
+        }));
+        
+        // 批次同步到本地儲存
+        await localStorageService.saveSentences(sentences);
+        
+        this.triggerRefresh();
+        
+        return {
+          sentences,
+          totalSentences: result.data.total_sentences,
+          totalPapers: result.data.total_papers,
+          papers: result.data.papers.map(paper => ({
+            id: paper.id,
+            fileName: paper.fileName,
+            processingStatus: paper.processing_status
+          }))
+        };
+      }
+      
+      console.warn('Failed to get all sentences from backend:', result.error);
+      return {
+        sentences: [],
+        totalSentences: 0,
+        totalPapers: 0,
+        papers: []
+      };
+    } catch (error) {
+      console.error('Error getting all sentences from backend:', error);
+      return {
+        sentences: [],
+        totalSentences: 0,
+        totalPapers: 0,
+        papers: []
+      };
+    }
+  }
+
+  /**
+   * 檢查論文是否有可用的句子資料
+   */
+  async hasPaperSentences(paperId: string): Promise<boolean> {
+    try {
+      const result = await apiService.getPaperSentences(paperId);
+      return result.success && result.data ? result.data.total_count > 0 : false;
+    } catch (error) {
+      console.error('Error checking paper sentences:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 檢查是否有任何已完成處理的論文
+   */
+  async hasAnyCompletedPapers(): Promise<boolean> {
+    try {
+      const papers = await this.getAllPapers();
+      return papers.some(paper => paper.processing_status === 'completed');
+    } catch (error) {
+      console.error('Error checking completed papers:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 保存處理後的句子（向後兼容性）
    */
   async savePaperSentences(sentences: ProcessedSentence[]): Promise<void> {
     try {

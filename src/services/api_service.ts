@@ -390,6 +390,58 @@ class ApiService {
   }
 
   /**
+   * 獲取論文的所有已處理句子
+   */
+  async getPaperSentences(paperId: string): Promise<ApiResponse<{
+    paper_id: string;
+    sentences: Array<{
+      id: string;
+      content: string;
+      type: string;
+      reason?: string;
+      pageNumber?: number;
+      fileName: string;
+      fileId: string;
+      sentenceOrder?: number;
+      sectionId?: string;
+      confidence?: number;
+      wordCount?: number;
+    }>;
+    total_count: number;
+    processing_status: string;
+  }>> {
+    return this.request(`/papers/${paperId}/sentences`);
+  }
+
+  /**
+   * 獲取所有已選取論文的句子資料
+   */
+  async getAllSelectedPapersSentences(): Promise<ApiResponse<{
+    sentences: Array<{
+      id: string;
+      content: string;
+      type: string;
+      reason?: string;
+      pageNumber?: number;
+      fileName: string;
+      fileId: string;
+      sentenceOrder?: number;
+      sectionId?: string;
+      confidence?: number;
+      wordCount?: number;
+    }>;
+    total_sentences: number;
+    total_papers: number;
+    papers: Array<{
+      id: string;
+      fileName: string;
+      processing_status: string;
+    }>;
+  }>> {
+    return this.request('/papers/sentences/all');
+  }
+
+  /**
    * @deprecated The task-based endpoint is unreliable. Use getPaperStatus instead.
    * 獲取特定任務的詳細進度
    */
