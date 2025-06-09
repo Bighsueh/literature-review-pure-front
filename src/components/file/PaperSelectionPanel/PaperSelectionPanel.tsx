@@ -29,7 +29,7 @@ const PaperSelectionPanel: React.FC<PaperSelectionPanelProps> = ({ className = '
 
   useEffect(() => {
     refreshPapers();
-    const interval = setInterval(refreshPapers, 10000); //每10秒刷新一次
+    const interval = setInterval(refreshPapers, 5000); // 每5秒刷新一次，更頻繁地檢查狀態
     return () => clearInterval(interval);
   }, [refreshPapers]);
 

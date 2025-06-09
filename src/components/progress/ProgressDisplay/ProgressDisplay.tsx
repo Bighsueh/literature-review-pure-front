@@ -52,7 +52,13 @@ const ProgressDisplay: React.FC = () => {
       case 'analyzing':
         return (
           <div className="mt-2 text-sm">
-            {details.message && <p>{details.message}</p>}
+            {details.stepName && <p className="font-medium">{details.stepName}</p>}
+            {details.currentStep && details.totalSteps && (
+              <p className="text-sm text-gray-600 mt-1">
+                步驟 {details.currentStep}/{details.totalSteps}
+              </p>
+            )}
+            {details.message && <p className="mt-1">{details.message}</p>}
             {details.currentSentence && (
               <div className="mt-1 p-2 bg-gray-50 rounded text-xs">
                 <p className="font-medium">當前處理句子:</p>
