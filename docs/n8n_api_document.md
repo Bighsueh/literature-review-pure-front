@@ -245,19 +245,30 @@ curl -X POST -H "Content-Type: application/json" \
 >
 > * 若之後想擴充其他 analysis\_focus，只需在此文件與對應 n8n Function Node 的 `switch` 分支中補上說明即可。
 
-## 4. unified content analysis (**新增**)
+## 4. unified content analysis (**更新**)
 
-**描述：** 這個 workflow 接收查詢語句和LLM選中的section內容，進行統一的多論文內容分析，產生整合回應。
+**描述：**
+此 workflow 接收「使用者查詢」與 **LLM 已挑選之 section 內容**，依 `analysis_focus` 執行**統一的多論文內容分析**，回傳整合後的回答、引用清單與來源統計。
 
-**觸發方式：**
+> ⚡ `analysis_focus` 現支援 **七種**：`locate_info`、`understand_content`、`cross_paper`、`definitions`、`methods`、`results`、`comparison`。
+>
+> * 其中前三種對應 A‒C 三大核心需求（資訊定位／深度閱讀／跨文獻整合）。
+> * 後四種為較細緻的主題分析。
 
-* **類型：** Webhook
-* **HTTP 方法：** `POST`
-* **路徑：** `/webhook/unified-content-analysis` (**待建立**)
+---
 
-**輸入 (Request Body - `application/json`)：**
+### 🔗 Webhook 設定
 
-```json
+| 項目          | 內容                                  |
+| ----------- | ----------------------------------- |
+| **HTTP 方法** | `POST`                              |
+| **路徑**      | `/webhook/unified-content-analysis` |
+
+---
+
+### 📥 輸入（Request Body — `application/json`）
+
+```jsonc
 {
   "query": "string",
   "selected_content": [
@@ -265,28 +276,41 @@ curl -X POST -H "Content-Type: application/json" \
       "paper_name": "string",
       "section_type": "string",
       "content_type": "string",
-      "content": "object"
+      "content": {}          // 結構取決於 content_type
     }
   ],
   "analysis_focus": "string"
 }
 ```
 
-| 欄位名稱         | 型別     | 描述                                | 範例                                         |
-| :--------------- | :------- | :---------------------------------- | :------------------------------------------- |
-| `query`          | `string` | 原始查詢語句                         | `"How do different papers define adaptive expertise?"` |
-| `selected_content` | `array` | LLM選中的section內容                | 見上方JSON結構                               |
-| `analysis_focus` | `string` | 分析重點類型                         | `"definitions"`, `"methods"`, `"comparison"` |
+| 欄位                 | 型別       | 描述                          | 範例／允許值                                                                                                      |
+| ------------------ | -------- | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `query`            | `string` | 使用者原始查詢                     | `"Locate operational definitions of adaptive expertise"`                                                    |
+| `selected_content` | `array`  | 由前序節點選出的 section 內容         | —                                                                                                           |
+|   `paper_name`     | `string` | 檔名或論文標題                     | `"smith2023.pdf"`                                                                                           |
+|   `section_type`   | `string` | IMRaD 章節或自訂分類               | `"method"`                                                                                                  |
+|   `content_type`   | `string` | section 的資料型別<sup>＊</sup>   | `"raw_text"` · `"definitions"` · `"methods"` · `"results"` · `"key_sentences"` …                            |
+|   `content`        | `object` | 內容本體（格式依 `content_type` 而異） | 例如 definitions 會是句子陣列、raw\_text 則是全文字串                                                                      |
+| `analysis_focus`   | `string` | **分析重點**                    | `locate_info` · `understand_content` · `cross_paper` · `definitions` · `methods` · `results` · `comparison` |
 
-**輸出 (Response Body - `application/json`)：**
+> **＊content\_type 說明**
+>
+> * `raw_text`：整段原文 (string)
+> * `definitions`／`methods`…：已按類別拆出的句子陣列
+> * `key_sentences`：模型挑選的精選句 (array)
+> * 可視需求擴充
 
-```json
+---
+
+### 📤 輸出（Response Body — `application/json`）
+
+```jsonc
 {
   "response": "string",
   "references": [
     {
       "id": "string",
-      "paper_name": "string", 
+      "paper_name": "string",
       "section_type": "string",
       "page_num": "number",
       "content_snippet": "string"
@@ -297,6 +321,104 @@ curl -X POST -H "Content-Type: application/json" \
     "papers_used": ["string"],
     "sections_analyzed": ["string"],
     "analysis_type": "string"
+  }
+}
+```
+
+| 欄位                                 | 型別         | 描述                                                                                                                                                                            | 備註                      |
+| ---------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `response`                         | `string`   | **AI 統整後回覆**，含 `[[ref:id]]` 引用標記。內容格式因 `analysis_focus` 而異：<br> - `locate_info` → Bullet / quote 句子清單<br> - `understand_content` → 條列摘要<br> - `cross_paper` → 可能含 Markdown 表格 | —                       |
+| `references`                       | `array`    | 依序列出所有引用來源                                                                                                                                                                    | `id` 應與 `[[ref:id]]` 對應 |
+| `source_summary.total_papers`      | `number`   | 參考之論文總數                                                                                                                                                                       | —                       |
+| `source_summary.papers_used`       | `string[]` | 實際被引用的檔名                                                                                                                                                                      | —                       |
+| `source_summary.sections_analyzed` | `string[]` | 分析過的章節種類                                                                                                                                                                      | —                       |
+| `source_summary.analysis_type`     | `string`   | 內部標記：<br>`locate_info` · `deep_reading` · `cross_paper` · `definition_comparison` · `method_review` · …                                                                       | 可供前端顯示或後續紀錄             |
+
+---
+
+### 🛠 範例呼叫：`locate_info`（A 類需求）
+
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  -d '{
+    "query": "Locate the original sentences that define adaptive expertise operationally",
+    "selected_content": [
+      {
+        "paper_name": "smith2023.pdf",
+        "section_type": "method",
+        "content_type": "key_sentences",
+        "content": [
+          {
+            "text": "We operationally define adaptive expertise as the capacity to...",
+            "page_num": 5,
+            "id": "smith2023_method_5"
+          }
+        ]
+      }
+    ],
+    "analysis_focus": "locate_info"
+  }' \
+  https://n8n.hsueh.tw/webhook/unified-content-analysis
+```
+
+#### 可能回應
+
+```json
+{
+  "response": "• We operationally define adaptive expertise as the capacity to... [[ref:smith2023_method_5]]",
+  "references": [
+    {
+      "id": "smith2023_method_5",
+      "paper_name": "smith2023.pdf",
+      "section_type": "method",
+      "page_num": 5,
+      "content_snippet": "We operationally define adaptive expertise as the capacity to..."
+    }
+  ],
+  "source_summary": {
+    "total_papers": 1,
+    "papers_used": ["smith2023.pdf"],
+    "sections_analyzed": ["method"],
+    "analysis_type": "locate_info"
+  }
+}
+```
+
+### 🛠 範例呼叫：`cross_paper`（C 類需求）
+
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  -d '{
+    "query": "Compare measurement tools for adaptive expertise across studies",
+    "selected_content": [
+      {
+        "paper_name": "smith2023.pdf",
+        "section_type": "method",
+        "content_type": "methods",
+        "content": [
+          { "tool": "Problem-solving task", "page_num": 5, "id": "smith2023_method_tool" }
+        ]
+      },
+      {
+        "paper_name": "lee2024.pdf",
+        "section_type": "method",
+        "content_type": "methods",
+        "content": [
+          { "tool": "Situational judgement test", "page_num": 6, "id": "lee2024_method_tool" }
+        ]
+      }
+    ],
+    "analysis_focus": "cross_paper"
+  }' \
+  https://n8n.hsueh.tw/webhook/unified-content-analysis
+```
+
+---
+
+> **備註**
+>
+> * `analysis_focus` 決定 LLM 在下游節點應用哪段 `analysisInstruction`。
+> * 若未傳入合法值，系統將 fallback 至 `default` 綜合分析邏輯。
   }
 }
 ```
