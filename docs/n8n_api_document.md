@@ -161,29 +161,57 @@ curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
 }
 ```
 
-| 欄位名稱           | 型別             | 描述                                       | 範例                                         |
-| :----------------- | :--------------- | :----------------------------------------- | :------------------------------------------- |
-| `selected_sections` | `array`         | 選中的sections和分析方式                    | 見上方JSON結構                               |
-| `analysis_focus`   | `string`         | 分析重點 (`definitions`, `methods`, `results`, `comparison`) | `"definitions"`                 |
-| `suggested_approach` | `string`       | 建議的分析方式                              | `"Compare definitions across papers"`         |
+| 欄位                   | 型別         | 描述                   | 允許值／範例                                                 |
+| -------------------- | ---------- | -------------------- | ------------------------------------------------------ |
+| `selected_sections`  | `array`    | 被挑選用來回答查詢的 sections  | —                                                      |
+|   `paper_name`       | `string`   | 檔名或論文標題              | `"smith2023.pdf"`                                      |
+|   `section_type`     | `string`   | IMRaD 章節或自訂類別        | `"method"`                                             |
+|   `focus_type`       | `string`   | 建議在該 section 執行的操作   | `key_sentences` · `deep_summary` · `cross_table` (可擴充) |
+|   `keywords`         | `string[]` | 用於篩選的關鍵詞             | `["measurement","adaptive expertise"]`                 |
+|   `selection_reason` | `string`   | 為何選此 section         | —                                                      |
+| `analysis_focus`     | `string`   | **分析重點** <br>（下表七選一） | `"cross_paper"`                                        |
+| `suggested_approach` | `string`   | 建議的分析方式              | `"Generate comparison table across papers"`            |
 
-**範例呼叫：**
+#### `analysis_focus` 允許值
+
+| 代號                                      | 對應需求類別      | 適用情境                      |
+| --------------------------------------- | ----------- | ------------------------- |
+| `locate_info` (或 `retrieval`)           | A 資訊定位與檢索   | 使用者要「找到原文句／段、章節或頁碼」。      |
+| `understand_content` (或 `deep_reading`) | B 內容理解與深度閱讀 | 深入解析單篇論文的定義、量測方法、研究動機…    |
+| `cross_paper` (或 `integration`)         | C 跨文獻比較與整合  | 需生成跨篇比較表、整合 research gap… |
+| `definitions`                           | B 細分        | 著重「概念／操作定義」的差異與演進。        |
+| `methods`                               | B 細分        | 著重方法論、量測工具的比較。            |
+| `results`                               | C 細分        | 著重主要發現、統計結果的差異。           |
+| `comparison`                            | C 細分        | 著重理論框架或研究觀點的對照。           |
+
+---
+
+### 🛠 範例呼叫
 
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   -d '{
-    "query": "What are the key methods for measuring adaptive expertise?",
+    "query": "Locate the original sentences that define adaptive expertise operationally",
     "available_papers": [
       {
         "file_name": "smith2023.pdf",
         "sections": [
+          {
+            "section_type": "introduction",
+            "page_num": 2,
+            "word_count": 950,
+            "brief_content": "Adaptive expertise is defined as the ability to...",
+            "od_count": 2,
+            "cd_count": 1,
+            "total_sentences": 38
+          },
           {
             "section_type": "method",
             "page_num": 5,
             "word_count": 1200,
             "brief_content": "We measured adaptive expertise using a problem-solving task...",
             "od_count": 3,
-            "cd_count": 1,
+            "cd_count": 0,
             "total_sentences": 45
           }
         ]
@@ -193,7 +221,7 @@ curl -X POST -H "Content-Type: application/json" \
   https://n8n.hsueh.tw/webhook/intelligent-section-selection
 ```
 
-**範例回應：**
+### 📝 範例回應
 
 ```json
 {
@@ -202,16 +230,20 @@ curl -X POST -H "Content-Type: application/json" \
       "paper_name": "smith2023.pdf",
       "section_type": "method",
       "focus_type": "key_sentences",
-      "keywords": ["measurement", "adaptive expertise", "assessment"],
-      "selection_reason": "Contains operational definitions and measurement approaches for adaptive expertise"
+      "keywords": ["operational definition", "adaptive expertise"],
+      "selection_reason": "Contains explicit operational definitions of adaptive expertise and related measurement descriptions"
     }
   ],
-  "analysis_focus": "methods",
-  "suggested_approach": "Extract and compare measurement approaches across selected papers"
+  "analysis_focus": "locate_info",
+  "suggested_approach": "Return the exact sentences with page numbers and [[ref:id]] tags"
 }
 ```
 
 ---
+
+> **備註**
+>
+> * 若之後想擴充其他 analysis\_focus，只需在此文件與對應 n8n Function Node 的 `switch` 分支中補上說明即可。
 
 ## 4. unified content analysis (**新增**)
 
