@@ -75,6 +75,9 @@ interface AppState {
   refreshPapers: () => Promise<void>;
   uploadPaper: (file: File) => Promise<{ success: boolean; error?: string }>;
   togglePaperSelection: (paperId: string) => Promise<void>;
+  setBatchPaperSelection: (paperIds: string[], selected: boolean) => Promise<void>;
+  selectAllPapers: () => Promise<void>;
+  deselectAllPapers: () => Promise<void>;
   deletePaper: (paperId: string) => Promise<void>;
   startProcessing: () => Promise<void>;
   stopProcessing: () => Promise<void>;
@@ -325,15 +328,33 @@ export const useAppStore = create<AppState>()(
         togglePaperSelection: async (paperId: string) => {
           const state = get();
           const paper = state.papers.list.find(p => p.id === paperId);
-          if (!paper) return;
+          if (!paper) {
+            set({
+              ui: { ...state.ui, errorMessage: '找不到指定的論文' }
+            });
+            return;
+          }
+          
+          // 設置loading狀態
+          set({
+            ui: { ...state.ui, isLoading: true, errorMessage: null }
+          });
+          
+          const startTime = Date.now();
+          const newSelectedState = !paper.selected;
           
           try {
-            const success = await paperService.togglePaperSelection(paperId, !paper.selected);
+            console.log(`開始切換論文選取狀態 - ID: ${paperId}, 目標狀態: ${newSelectedState}`);
+            
+            const success = await paperService.togglePaperSelection(paperId, newSelectedState);
+            const processingTime = Date.now() - startTime;
+            
+            console.log(`論文選取狀態切換完成 - 成功: ${success}, 處理時間: ${processingTime}ms`);
             
             if (success) {
               // 更新本地狀態
               const updatedPapers = state.papers.list.map(p => 
-                p.id === paperId ? { ...p, selected: !p.selected } : p
+                p.id === paperId ? { ...p, selected: newSelectedState } : p
               );
               const selectedIds = updatedPapers.filter(p => p.selected).map(p => p.id);
               
@@ -343,14 +364,95 @@ export const useAppStore = create<AppState>()(
                   list: updatedPapers,
                   selectedIds,
                 },
+                ui: { ...state.ui, isLoading: false, errorMessage: null }
+              });
+              
+              console.log(`本地狀態更新成功 - 論文 ${paperId} 選取狀態: ${newSelectedState}`);
+            } else {
+              console.warn(`論文選取狀態更新失敗 - ID: ${paperId}`);
+              set({
+                ui: { 
+                  ...state.ui, 
+                  isLoading: false, 
+                  errorMessage: '論文選取狀態更新失敗，請稍後重試' 
+                }
               });
             }
           } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Failed to toggle selection';
+            const processingTime = Date.now() - startTime;
+            console.error(`論文選取狀態切換異常 - ID: ${paperId}, 處理時間: ${processingTime}ms`, error);
+            
+            let errorMessage = '選取狀態更新失敗';
+            
+            if (error instanceof Error) {
+              if (error.name === 'TimeoutError' || processingTime > 10000) {
+                errorMessage = '請求超時，請檢查網路連接後重試';
+              } else if (error.message.includes('400')) {
+                errorMessage = '請求參數錯誤，請重新整理頁面後重試';
+              } else if (error.message.includes('404')) {
+                errorMessage = '論文不存在，請重新整理頁面';
+              } else if (error.message.includes('500')) {
+                errorMessage = '伺服器錯誤，請稍後重試';
+              } else {
+                errorMessage = `更新失敗: ${error.message}`;
+              }
+            }
+            
             set({
-              ui: { ...state.ui, errorMessage },
+              ui: { 
+                ...state.ui, 
+                isLoading: false, 
+                errorMessage 
+              }
             });
           }
+        },
+
+        setBatchPaperSelection: async (paperIds: string[], selected: boolean) => {
+          const state = get();
+          set({ ui: { ...state.ui, isLoading: true, errorMessage: null } });
+          
+          try {
+            const success = await paperService.setBatchSelection(paperIds, selected);
+            
+            if (success) {
+              // 更新本地狀態
+              const updatedPapers = state.papers.list.map(p => 
+                paperIds.includes(p.id) ? { ...p, selected } : p
+              );
+              const selectedIds = updatedPapers.filter(p => p.selected).map(p => p.id);
+              
+              set({
+                papers: {
+                  ...state.papers,
+                  list: updatedPapers,
+                  selectedIds,
+                },
+                ui: { ...state.ui, isLoading: false },
+              });
+            } else {
+              set({
+                ui: { ...state.ui, isLoading: false, errorMessage: 'Failed to update paper selection' },
+              });
+            }
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Failed to update paper selection';
+            set({
+              ui: { ...state.ui, isLoading: false, errorMessage },
+            });
+          }
+        },
+
+        selectAllPapers: async () => {
+          const state = get();
+          const allPaperIds = state.papers.list.map(p => p.id);
+          await get().setBatchPaperSelection(allPaperIds, true);
+        },
+
+        deselectAllPapers: async () => {
+          const state = get();
+          const allPaperIds = state.papers.list.map(p => p.id);
+          await get().setBatchPaperSelection(allPaperIds, false);
         },
         
         deletePaper: async (paperId: string) => {
