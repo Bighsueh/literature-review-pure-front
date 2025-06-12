@@ -5,7 +5,11 @@ from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import uuid
+import asyncio
+import time
+from uuid import UUID
 
+from ..core.logging import get_logger
 from ..models.paper import (
     Paper, PaperSection, Sentence, PaperSelection, ProcessingQueue, SystemSettings,
     PaperCreate, PaperUpdate, SectionCreate, SentenceCreate, 
@@ -13,6 +17,8 @@ from ..models.paper import (
     PaperResponse, SectionResponse, SentenceResponse, ProcessingQueueResponse,
     SectionSummary, PaperSectionSummary
 )
+
+logger = get_logger(__name__)
 
 class DatabaseService:
     """資料庫服務類，處理所有資料庫操作"""
@@ -390,6 +396,7 @@ class DatabaseService:
                     "processing_status": paper.processing_status,
                     "grobid_processed": paper.grobid_processed,
                     "sentences_processed": paper.sentences_processed,
+                    "od_cd_processed": paper.od_cd_processed,
                     "pdf_deleted": paper.pdf_deleted,
                     "error_message": paper.error_message,
                     "processing_completed_at": paper.processing_completed_at,
@@ -402,21 +409,76 @@ class DatabaseService:
     
     async def set_paper_selection(self, db: AsyncSession, paper_id: str, is_selected: bool) -> bool:
         """設定論文選取狀態"""
-        # 先嘗試更新
-        update_query = (
-            update(PaperSelection)
-            .where(PaperSelection.paper_id == paper_id)
-            .values(is_selected=is_selected, selected_timestamp=func.current_timestamp())
-        )
-        result = await db.execute(update_query)
+        start_time = time.time()
+        logger.info(f"開始設定論文選取狀態 - paper_id: {paper_id}, is_selected: {is_selected}")
         
-        # 如果沒有更新到任何記錄，表示不存在，需要建立新記錄
-        if result.rowcount == 0:
-            selection = PaperSelection(paper_id=paper_id, is_selected=is_selected)
-            db.add(selection)
-        
-        await db.commit()
-        return True
+        try:
+            # 驗證 paper_id 格式
+            try:
+                UUID(paper_id)
+            except ValueError:
+                logger.error(f"無效的論文ID格式: {paper_id}")
+                return False
+            
+            # 使用超時保護包裝資料庫操作
+            async def _perform_database_operation():
+                # 先嘗試更新現有記錄
+                logger.debug(f"嘗試更新現有選取記錄 - paper_id: {paper_id}")
+                update_query = (
+                    update(PaperSelection)
+                    .where(PaperSelection.paper_id == paper_id)
+                    .values(is_selected=is_selected, selected_timestamp=func.current_timestamp())
+                )
+                result = await db.execute(update_query)
+                
+                # 如果沒有更新到任何記錄，表示不存在，需要建立新記錄
+                if result.rowcount == 0:
+                    logger.debug(f"創建新的選取記錄 - paper_id: {paper_id}")
+                    selection = PaperSelection(paper_id=paper_id, is_selected=is_selected)
+                    db.add(selection)
+                
+                # 提交事務
+                logger.debug(f"提交資料庫事務 - paper_id: {paper_id}")
+                await db.commit()
+                return result.rowcount
+            
+            # 設定5秒超時
+            try:
+                updated_rows = await asyncio.wait_for(_perform_database_operation(), timeout=5.0)
+                processing_time = time.time() - start_time
+                
+                if updated_rows == 0:
+                    logger.info(f"創建新選取記錄成功 - paper_id: {paper_id}, is_selected: {is_selected}, 處理時間: {processing_time:.3f}s")
+                else:
+                    logger.info(f"更新現有選取記錄成功 - paper_id: {paper_id}, is_selected: {is_selected}, 處理時間: {processing_time:.3f}s")
+                
+                return True
+                
+            except asyncio.TimeoutError:
+                processing_time = time.time() - start_time
+                logger.error(f"資料庫操作超時 - paper_id: {paper_id}, 超時時間: 5秒, 實際處理時間: {processing_time:.3f}s")
+                
+                # 嘗試回滾事務
+                try:
+                    await db.rollback()
+                    logger.debug(f"事務回滾成功 - paper_id: {paper_id}")
+                except Exception as rollback_error:
+                    logger.error(f"事務回滾失敗 - paper_id: {paper_id}, 錯誤: {rollback_error}")
+                
+                return False
+                
+        except Exception as e:
+            processing_time = time.time() - start_time
+            logger.error(f"設定論文選取狀態發生錯誤 - paper_id: {paper_id}, 錯誤: {str(e)}, 類型: {type(e).__name__}, 處理時間: {processing_time:.3f}s", exc_info=True)
+            
+            # 嘗試回滾事務
+            try:
+                await db.rollback()
+                logger.debug(f"錯誤後事務回滾成功 - paper_id: {paper_id}")
+            except Exception as rollback_error:
+                logger.error(f"錯誤後事務回滾失敗 - paper_id: {paper_id}, 回滾錯誤: {rollback_error}")
+            
+            return False
     
     async def mark_paper_selected(self, db: AsyncSession, paper_id: str) -> bool:
         """標記論文為已選取"""

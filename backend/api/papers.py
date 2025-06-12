@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+import time
 
 from ..core.database import get_db
 from ..services.db_service import db_service
@@ -30,7 +31,7 @@ async def get_papers(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         raise handle_internal_error(f"取得論文清單失敗: {str(e)}")
 
-@router.get("/selected", response_model=List[Dict[str, Any]])
+@router.get("/selected", response_model=List[PaperResponse])
 async def get_selected_papers(db: AsyncSession = Depends(get_db)):
     """取得已選取的論文清單"""
     try:
@@ -62,30 +63,81 @@ async def get_papers_sections_summary(db: AsyncSession = Depends(get_db)):
 @router.post("/{paper_id}/select")
 async def toggle_paper_selection(
     paper_id: str,
+    request: Request,
     selection_data: PaperSelectionUpdate,
     db: AsyncSession = Depends(get_db)
 ):
     """切換論文選取狀態"""
+    start_time = time.time()
+    
+    # 記錄原始請求體
     try:
+        body = await request.body()
+        logger.info(f"原始請求體 - paper_id: {paper_id}, body: {body.decode('utf-8', errors='ignore')}")
+        logger.info(f"請求標頭 - Content-Type: {request.headers.get('content-type')}, Content-Length: {request.headers.get('content-length')}")
+    except Exception as body_error:
+        logger.error(f"無法讀取請求體 - paper_id: {paper_id}, 錯誤: {body_error}")
+    
+    # 記錄請求開始
+    logger.info(f"開始處理論文選取請求 - paper_id: {paper_id}, is_selected: {selection_data.is_selected}")
+    
+    try:
+        # 驗證 paper_id 格式
+        try:
+            from uuid import UUID
+            UUID(paper_id)
+        except ValueError:
+            logger.warning(f"無效的論文ID格式: {paper_id}")
+            raise handle_validation_error(ValidationException("無效的論文ID格式"))
+        
+        # 驗證請求資料
+        if selection_data.is_selected is None:
+            logger.warning(f"缺少必要欄位 is_selected")
+            raise handle_validation_error(ValidationException("缺少必要欄位: is_selected"))
+        
+        if not isinstance(selection_data.is_selected, bool):
+            logger.warning(f"is_selected 必須是布林值，收到: {type(selection_data.is_selected)}")
+            raise handle_validation_error(ValidationException("is_selected 必須是布林值"))
+        
         # 檢查論文是否存在
+        logger.debug(f"檢查論文是否存在: {paper_id}")
         paper = await db_service.get_paper_by_id(db, paper_id)
         if not paper:
+            logger.warning(f"論文不存在: {paper_id}")
             raise handle_not_found_error("論文不存在")
         
+        # 執行選取狀態更新
+        logger.debug(f"更新論文選取狀態: {paper_id} -> {selection_data.is_selected}")
         success = await db_service.set_paper_selection(
             db, paper_id, selection_data.is_selected
         )
         
+        # 記錄處理時間
+        processing_time = time.time() - start_time
+        
         if success:
+            status_text = '已選取' if selection_data.is_selected else '未選取'
+            logger.info(f"論文選取狀態更新成功 - paper_id: {paper_id}, 狀態: {status_text}, 處理時間: {processing_time:.3f}s")
             return {
                 "success": True,
-                "message": f"論文選取狀態已更新為: {'已選取' if selection_data.is_selected else '未選取'}"
+                "message": f"論文選取狀態已更新為: {status_text}",
+                "paper_id": paper_id,
+                "is_selected": selection_data.is_selected,
+                "processing_time_ms": round(processing_time * 1000, 2)
             }
         else:
+            logger.error(f"更新選取狀態失敗 - paper_id: {paper_id}, 處理時間: {processing_time:.3f}s")
             raise handle_internal_error("更新選取狀態失敗")
+            
     except HTTPException:
+        # HTTP異常直接重新拋出，但記錄處理時間
+        processing_time = time.time() - start_time
+        logger.warning(f"HTTP異常 - paper_id: {paper_id}, 處理時間: {processing_time:.3f}s")
         raise
     except Exception as e:
+        # 其他異常的詳細記錄
+        processing_time = time.time() - start_time
+        logger.error(f"切換選取狀態發生未預期錯誤 - paper_id: {paper_id}, 錯誤: {str(e)}, 類型: {type(e).__name__}, 處理時間: {processing_time:.3f}s", exc_info=True)
         raise handle_internal_error(f"切換選取狀態失敗: {str(e)}")
 
 @router.post("/select_all")
@@ -122,43 +174,98 @@ async def batch_select_papers(
     db: AsyncSession = Depends(get_db)
 ):
     """批次選取論文"""
+    start_time = time.time()
+    
+    # 記錄請求開始
+    logger.info(f"開始處理批次選取請求 - 資料: {request_data}")
+    
     try:
         # 驗證請求資料
+        if not isinstance(request_data, dict):
+            logger.warning(f"請求資料格式無效，期望dict，收到: {type(request_data)}")
+            raise ValidationException("請求資料必須是字典格式")
+            
         if "paper_ids" not in request_data:
+            logger.warning("缺少必要欄位: paper_ids")
             raise ValidationException("缺少必要欄位: paper_ids")
         
         if "selected" not in request_data:
+            logger.warning("缺少必要欄位: selected")
             raise ValidationException("缺少必要欄位: selected")
         
         paper_ids = request_data["paper_ids"]
         selected = request_data["selected"]
         
+        # 驗證資料類型
         if not isinstance(paper_ids, list):
+            logger.warning(f"paper_ids 必須是陣列，收到: {type(paper_ids)}")
             raise ValidationException("paper_ids 必須是陣列")
         
         if not isinstance(selected, bool):
+            logger.warning(f"selected 必須是布林值，收到: {type(selected)}")
             raise ValidationException("selected 必須是布林值")
+        
+        # 驗證 paper_ids 內容
+        if len(paper_ids) == 0:
+            logger.warning("paper_ids 陣列不能為空")
+            raise ValidationException("paper_ids 陣列不能為空")
+        
+        # 驗證每個 paper_id 格式
+        from uuid import UUID
+        for paper_id in paper_ids:
+            try:
+                UUID(paper_id)
+            except (ValueError, TypeError):
+                logger.warning(f"無效的論文ID格式: {paper_id}")
+                raise ValidationException(f"無效的論文ID格式: {paper_id}")
+        
+        logger.debug(f"批次更新 {len(paper_ids)} 篇論文選取狀態為: {selected}")
         
         # 執行批次選取
         success_count = 0
+        failed_papers = []
+        
         for paper_id in paper_ids:
             try:
                 success = await db_service.set_paper_selection(db, paper_id, selected)
                 if success:
                     success_count += 1
+                else:
+                    failed_papers.append(paper_id)
+                    logger.warning(f"設置論文 {paper_id} 選取狀態失敗: 資料庫操作返回失敗")
             except Exception as e:
+                failed_papers.append(paper_id)
                 logger.warning(f"設置論文 {paper_id} 選取狀態失敗: {e}")
         
-        return {
+        # 記錄處理時間
+        processing_time = time.time() - start_time
+        status_text = '已選取' if selected else '未選取'
+        
+        logger.info(f"批次選取完成 - 成功: {success_count}/{len(paper_ids)}, 狀態: {status_text}, 處理時間: {processing_time:.3f}s")
+        
+        response = {
             "success": True,
-            "message": f"成功更新 {success_count}/{len(paper_ids)} 篇論文的選取狀態",
+            "message": f"成功更新 {success_count}/{len(paper_ids)} 篇論文的選取狀態為{status_text}",
             "updated_count": success_count,
-            "total_count": len(paper_ids)
+            "total_count": len(paper_ids),
+            "selected": selected,
+            "processing_time_ms": round(processing_time * 1000, 2)
         }
         
+        # 如果有失敗的論文，也在回應中包含
+        if failed_papers:
+            response["failed_papers"] = failed_papers
+            response["warning"] = f"有 {len(failed_papers)} 篇論文更新失敗"
+        
+        return response
+        
     except ValidationException as e:
+        processing_time = time.time() - start_time
+        logger.warning(f"批次選取驗證失敗 - 錯誤: {str(e)}, 處理時間: {processing_time:.3f}s")
         raise handle_validation_error(e)
     except Exception as e:
+        processing_time = time.time() - start_time
+        logger.error(f"批次選取發生未預期錯誤 - 錯誤: {str(e)}, 類型: {type(e).__name__}, 處理時間: {processing_time:.3f}s", exc_info=True)
         raise handle_internal_error(f"批次選取失敗: {str(e)}")
 
 # ===== 處理狀態管理 =====

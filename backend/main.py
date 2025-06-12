@@ -219,42 +219,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # 添加 JSON 解析錯誤處理器
 @app.middleware("http")
 async def json_parsing_middleware(request: Request, call_next):
-    """JSON 解析錯誤中間件"""
+    """簡化的 JSON 解析錯誤中間件"""
     content_type = request.headers.get("content-type", "")
     
     # 如果是檔案上傳請求，則跳過 JSON 解析
     if "multipart/form-data" in content_type:
         return await call_next(request)
-        
-    try:
-        # 對於需要 JSON 的請求，預先檢查 JSON 格式
-        if request.method in ["POST", "PUT", "PATCH"] and "application/json" in content_type:
-            body = await request.body()
-            if body:
-                try:
-                    json.loads(body)
-                except json.JSONDecodeError as e:
-                    logger.warning(f"無效的 JSON 格式: {e}", extra={"body": body.decode('utf-8', errors='ignore')})
-                    return JSONResponse(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        content={
-                            "detail": "無效的 JSON 格式",
-                            "error_code": "INVALID_JSON",
-                            "details": {"message": "請求包含無效的 JSON 資料"}
-                        }
-                    )
-            # 重建請求以供後續處理
-            request._body = body
-        
-        response = await call_next(request)
-        return response
     
-    except Exception as e:
-        logger.error(f"JSON 解析中間件錯誤: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": "內部伺服器錯誤", "error_code": "UNEXPECTED_ERROR"}
-        )
+    # 對於其他請求，直接處理，讓 FastAPI 自己處理 JSON 解析
+    return await call_next(request)
 
 
 @app.exception_handler(Exception)
