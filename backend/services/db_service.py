@@ -371,6 +371,27 @@ class DatabaseService:
             }
             for sentence in sentences
         ]
+
+    async def get_sentences_by_section_id(self, db: AsyncSession, section_id: str) -> List[Dict[str, Any]]:
+        """取得章節的所有句子"""
+        query = (
+            select(Sentence)
+            .where(Sentence.section_id == section_id)
+            .order_by(Sentence.sentence_order)
+        )
+        result = await db.execute(query)
+        sentences = result.scalars().all()
+        
+        return [
+            {
+                "text": sentence.sentence_text,
+                "page_num": sentence.page_num,
+                "defining_type": sentence.defining_type,
+                "sentence_order": sentence.sentence_order,
+                "id": str(sentence.id)
+            }
+            for sentence in sentences
+        ]
     
     # ===== Paper Selection Management =====
     

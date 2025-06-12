@@ -215,49 +215,161 @@ class UnifiedQueryProcessor:
             'fallback_mode': True
         }
     
-    def _extract_content_from_summary(
+    async def _extract_content(
         self, 
-        section_selection: Dict[str, Any], 
-        papers_summary: List[Dict[str, Any]]
+        query: str,
+        selected_sections: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """從摘要中提取內容（簡化版本）"""
-        selected_content = []
+        """基於 focus_type 的內容提取邏輯"""
         
-        for selection in section_selection.get('selected_sections', []):
-            # 找到對應的論文和章節
-            for paper in papers_summary:
-                if paper['file_name'] == selection['file_name']:
-                for section in paper['sections']:
-                    if (section['section_type'] == selection['section_type'] and 
-                        section.get('page_num') == selection.get('page_num')):
-                
-                            # 簡化的內容提取
-                content_items = []
-                            if section['od_count'] > 0:
-                    content_items.append({
-                                    'text': f"此章節包含 {section['od_count']} 個操作型定義",
-                                    'type': 'OD',
-                                    'page_num': section['page_num']
-                                })
-                            if section['cd_count'] > 0:
-                    content_items.append({
-                                    'text': f"此章節包含 {section['cd_count']} 個概念型定義",
-                                    'type': 'CD',
-                                    'page_num': section['page_num']
+        if not selected_sections:
+            logger.warning("沒有選中的章節")
+            return []
+        
+        extracted_content = []
+        
+        for section in selected_sections:
+            section_id = section.get('section_id')
+            paper_name = section.get('paper_name', section.get('file_name'))
+            section_type = section.get('section_type')
+            focus_type = section.get('focus_type', 'definitions')
+            
+            if focus_type == 'definitions':
+                content = await self._process_definitions_content(query, section_id, paper_name, section_type)
+                if content:
+                    extracted_content.append(content)
+            else:
+                # 其他 focus_type 的處理框架
+                logger.info(f"暫不支援 focus_type: {focus_type}，使用預設處理")
+                content = await self._process_default_content(query, section_id, paper_name, section_type)
+                if content:
+                    extracted_content.append(content)
+        
+        logger.info(f"成功提取 {len(extracted_content)} 個章節的內容")
+        return extracted_content
+    
+    async def _process_definitions_content(
+        self, 
+        query: str, 
+        section_id: str, 
+        paper_name: str, 
+        section_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """處理 definitions 類型的內容"""
+        try:
+            # 步驟1: 關鍵詞提取
+            keywords = await n8n_service.extract_keywords(query)
+            logger.info(f"提取到關鍵詞: {keywords}")
+            
+            # 步驟2: 從資料庫取得該章節的所有句子
+            async for db in get_db():
+                try:
+                    all_sentences = await db_service.get_sentences_by_section_id(db, section_id)
+                    
+                    if not all_sentences:
+                        logger.warning(f"章節 {section_id} 沒有找到句子")
+                        return None
+                    
+                    logger.info(f"章節 {section_id} 取得 {len(all_sentences)} 個句子")
+                    
+                    # 步驟3: 全比對搜尋邏輯
+                    matched_sentences = self._find_matching_sentences(all_sentences, keywords)
+                    logger.info(f"關鍵詞匹配找到 {len(matched_sentences)} 個句子")
+                    
+                    # 步驟4: 篩選定義句子 (OD/CD)
+                    definition_sentences = self._filter_definition_sentences(matched_sentences)
+                    logger.info(f"篩選出 {len(definition_sentences)} 個定義句子")
+                    
+                    if not definition_sentences:
+                        logger.warning(f"章節 {section_id} 沒有找到符合的定義句子")
+                        return None
+                    
+                    # 步驟5: 構建 selected_content 格式
+                    content_items = []
+                    for sentence in definition_sentences:
+                        content_items.append({
+                            "text": sentence["text"],
+                            "type": sentence["defining_type"],
+                            "page_num": sentence["page_num"],
+                            "id": f"{paper_name.replace('.pdf', '')}_{section_type}_{sentence['page_num']}_{sentence.get('sentence_order', 0)}",
+                            "reason": f"This sentence contains a {sentence['defining_type']} definition related to the query."
                         })
-                
-                if content_items:
-                    selected_content.append({
-                                    'paper_name': paper['file_name'],
-                                    'section_type': section['section_type'],
-                        'content_type': 'definitions',
-                        'content': content_items
-                    })
-                        break
-                        break
+                    
+                    return {
+                        "paper_name": paper_name,
+                        "section_type": section_type,
+                        "content_type": "definitions",
+                        "content": content_items
+                    }
+                    
+                except Exception as e:
+                    logger.error(f"資料庫操作失敗: {e}")
+                    return None
+                finally:
+                    break  # 退出 async generator
+                    
+        except Exception as e:
+            logger.error(f"處理 definitions 內容失敗: {e}")
+            return None
+    
+    async def _process_default_content(
+        self, 
+        query: str, 
+        section_id: str, 
+        paper_name: str, 
+        section_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """預設內容處理（框架）"""
+        logger.info(f"使用預設處理邏輯處理章節 {section_id}")
         
-        logger.info(f"提取了 {len(selected_content)} 個章節的內容")
-        return selected_content
+        # 這裡是其他 focus_type 的處理邏輯框架
+        # 目前返回簡化的內容
+        return {
+            "paper_name": paper_name,
+            "section_type": section_type,
+            "content_type": "general",
+            "content": [
+                {
+                    "text": f"章節 {section_type} 的相關內容",
+                    "type": "GENERAL",
+                    "page_num": 1,
+                    "id": f"{paper_name.replace('.pdf', '')}_{section_type}_general"
+                }
+            ]
+        }
+    
+    def _find_matching_sentences(
+        self, 
+        sentences: List[Dict[str, Any]], 
+        keywords: List[str]
+    ) -> List[Dict[str, Any]]:
+        """全比對搜尋邏輯"""
+        matched_sentences = []
+        
+        for sentence in sentences:
+            sentence_text = sentence.get("text", "").lower()
+            
+            # 檢查是否包含任何關鍵詞
+            for keyword in keywords:
+                if keyword.lower() in sentence_text:
+                    matched_sentences.append(sentence)
+                    break  # 找到一個匹配即可
+        
+        return matched_sentences
+    
+    def _filter_definition_sentences(
+        self, 
+        sentences: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """篩選定義句子 (OD/CD)"""
+        definition_sentences = []
+        
+        for sentence in sentences:
+            defining_type = sentence.get("defining_type")
+            if defining_type in ["OD", "CD"]:
+                definition_sentences.append(sentence)
+        
+        return definition_sentences
     
     async def _unified_content_analysis(
         self, 

@@ -1,0 +1,37 @@
+{
+  "test_suite": "BACKLOG-FIX-03 整合測試",
+  "timestamp": "2025-06-13T01:31:46.729885",
+  "summary": {
+    "total_tests": 5,
+    "passed": 5,
+    "failed": 0,
+    "success_rate": "100.0%"
+  },
+  "test_results": [
+    {
+      "test_name": "句子篩選邏輯 (OD/CD)",
+      "success": true,
+      "details": "從 3 個句子中篩選出 2 個定義句子"
+    },
+    {
+      "test_name": "selected_content 格式結構驗證",
+      "success": true,
+      "details": "格式檢查: 必要欄位 True, 內容有效 True"
+    },
+    {
+      "test_name": "definitions content_type 驗證邏輯",
+      "success": true,
+      "details": "有效內容檢查: True, 無效內容拒絕: True"
+    },
+    {
+      "test_name": "關鍵詞匹配演算法",
+      "success": true,
+      "details": "匹配結果: [0, 1], 預期: [0, 1]"
+    },
+    {
+      "test_name": "引用 ID 生成邏輯",
+      "success": true,
+      "details": "生成的 ID: smith2023_introduction_2_5, 預期格式正確: True"
+    }
+  ]
+}

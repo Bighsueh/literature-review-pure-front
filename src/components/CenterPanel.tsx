@@ -22,18 +22,40 @@ const CenterPanel: React.FC<CenterPanelProps> = ({ onReferenceClick }) => {
   const checkCompletedPapers = async () => {
     setIsCheckingPapers(true);
     try {
+      console.log('🔍 檢查已完成的論文...');
       const hasCompleted = await paperService.hasAnyCompletedPapers();
+      console.log('📊 hasAnyCompletedPapers:', hasCompleted);
       setHasCompletedPapers(hasCompleted);
       
       // 如果有已完成的論文，嘗試同步句子資料
       if (hasCompleted) {
+        console.log('📥 獲取句子資料...');
         const sentencesData = await paperService.getAllSelectedPapersSentences();
+        console.log('📝 句子資料:', {
+          totalSentences: sentencesData.totalSentences,
+          totalPapers: sentencesData.totalPapers,
+          papers: sentencesData.papers
+        });
         setSentencesCount(sentencesData.totalSentences);
       } else {
-        setSentencesCount(0);
+        // 如果檢查結果顯示沒有已完成論文，但我們可以直接嘗試獲取句子
+        console.log('⚠️ 沒有檢測到已完成論文，嘗試直接獲取句子資料...');
+        try {
+          const sentencesData = await paperService.getAllSelectedPapersSentences();
+          if (sentencesData.totalSentences > 0) {
+            console.log('✅ 發現句子資料，覆蓋檢查結果:', sentencesData.totalSentences);
+            setHasCompletedPapers(true);
+            setSentencesCount(sentencesData.totalSentences);
+          } else {
+            setSentencesCount(0);
+          }
+        } catch (fallbackError) {
+          console.error('❌ 備援檢查也失敗:', fallbackError);
+          setSentencesCount(0);
+        }
       }
     } catch (error) {
-      console.error('Error checking completed papers:', error);
+      console.error('❌ 檢查已完成論文時出錯:', error);
       // 降級到檢查本地句子資料
       setHasCompletedPapers(sentences.length > 0);
       setSentencesCount(sentences.length);
