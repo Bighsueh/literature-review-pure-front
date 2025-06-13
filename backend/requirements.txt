@@ -33,6 +33,7 @@ apscheduler==3.10.4
 
 # 日誌與監控
 structlog==23.2.0
+psutil==5.9.6
 
 # 密碼學和雜湊
 # hashlib-compat==1.0.1  # 已包含在Python標準庫中

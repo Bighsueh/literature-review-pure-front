@@ -1,22 +1,21 @@
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
-from sqlalchemy import select, update, delete, and_, or_, func, desc
-from sqlalchemy.exc import IntegrityError
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-import uuid
 import asyncio
 import time
 from uuid import UUID
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete, desc, and_, or_, func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from ..core.logging import get_logger
 from ..models.paper import (
-    Paper, PaperSection, Sentence, PaperSelection, ProcessingQueue, SystemSettings,
-    PaperCreate, PaperUpdate, SectionCreate, SentenceCreate, 
-    ProcessingQueueCreate, ProcessingQueueUpdate, PaperSelectionUpdate,
-    PaperResponse, SectionResponse, SentenceResponse, ProcessingQueueResponse,
-    SectionSummary, PaperSectionSummary
+    Paper, PaperSection, Sentence, PaperSelection, ProcessingQueue,
+    PaperCreate, PaperUpdate, PaperResponse,
+    SectionCreate, SectionResponse,
+    SentenceCreate, SentenceResponse,
+    ProcessingQueueCreate, ProcessingQueueResponse,
+    PaperSectionSummary, SectionSummary
 )
+from ..core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -57,16 +56,24 @@ class DatabaseService:
         return result.scalar_one_or_none()
     
     async def get_all_papers(self, db: AsyncSession) -> List[Dict[str, Any]]:
-        """取得所有論文，包含選取狀態"""
+        """取得所有論文，包含選取狀態和正確的統計數據"""
         query = (
-            select(Paper, PaperSelection.is_selected)
+            select(
+                Paper, 
+                PaperSelection.is_selected,
+                func.count(func.distinct(PaperSection.id)).label('section_count'),
+                func.count(func.distinct(Sentence.id)).label('sentence_count')
+            )
             .outerjoin(PaperSelection, Paper.id == PaperSelection.paper_id)
+            .outerjoin(PaperSection, Paper.id == PaperSection.paper_id)
+            .outerjoin(Sentence, Paper.id == Sentence.paper_id)
+            .group_by(Paper.id, PaperSelection.is_selected)
             .order_by(desc(Paper.created_at))
         )
         result = await db.execute(query)
         papers = []
         
-        for paper, is_selected in result:
+        for paper, is_selected, section_count, sentence_count in result:
             paper_dict = {
                 "id": str(paper.id),
                 "title": paper.original_filename or paper.file_name,
@@ -76,8 +83,8 @@ class DatabaseService:
                 "processing_status": paper.processing_status,
                 "selected": is_selected if is_selected is not None else False,
                 "authors": [],  # Placeholder, to be implemented
-                "section_count": 0,  # Placeholder, to be implemented
-                "sentence_count": 0,  # Placeholder, to be implemented
+                "section_count": section_count or 0,  # 修復：使用真實計數
+                "sentence_count": sentence_count or 0,  # 修復：使用真實計數
                 
                 # Keep original fields for compatibility if needed elsewhere
                 "original_filename": paper.original_filename,
@@ -137,45 +144,106 @@ class DatabaseService:
 
     async def save_sections_and_sentences(self, db: AsyncSession, paper_id: str, sections_analysis: List[Dict[str, Any]], sentences_data: List[Dict[str, Any]], status: str = "processing"):
         """保存章節和句子資料"""
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        logger.info(f"開始儲存章節和句子資料 - paper_id: {paper_id}, sections: {len(sections_analysis)}, sentences: {len(sentences_data)}")
+        
+        try:
+            # 1. 批次插入章節
+            sections_to_insert = []
+            for s in sections_analysis:
+                if not s.get("section_id") or not s.get("content"):
+                    logger.warning(f"跳過無效章節資料: {s}")
+                    continue
+                    
+                sections_to_insert.append({
+                    "id": s["section_id"], 
+                    "paper_id": paper_id, 
+                    "section_type": s["section_type"],
+                    "content": s["content"], 
+                    "section_order": s.get("order"), 
+                    "word_count": s.get("word_count")
+                })
+            
+            if sections_to_insert:
+                logger.info(f"準備插入 {len(sections_to_insert)} 個章節")
+                stmt = pg_insert(PaperSection).values(sections_to_insert)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['id'],
+                    set_={k: getattr(stmt.excluded, k) for k in sections_to_insert[0] if k != 'id'}
+                )
+                result = await db.execute(stmt)
+                logger.info(f"章節插入完成，affected rows: {result.rowcount}")
+            else:
+                logger.error("沒有有效的章節資料可插入")
+                raise ValueError("章節資料為空或無效")
 
-        # 1. 批次插入章節
-        sections_to_insert = [
-            {
-                "id": s["section_id"], "paper_id": paper_id, "section_type": s["section_type"],
-                "content": s["content"], "section_order": s.get("order"), "word_count": s.get("word_count")
-            } for s in sections_analysis
-        ]
-        if sections_to_insert:
-            stmt = pg_insert(PaperSection).values(sections_to_insert)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=['id'],
-                set_={k: getattr(stmt.excluded, k) for k in sections_to_insert[0] if k != 'id'}
-            )
-            await db.execute(stmt)
+            # 2. 批次插入句子
+            sentences_to_insert = []
+            for s in sentences_data:
+                if not s.get("sentence_id") or not s.get("text"):
+                    logger.warning(f"跳過無效句子資料: {s}")
+                    continue
+                    
+                sentences_to_insert.append({
+                    "id": s["sentence_id"], 
+                    "paper_id": paper_id, 
+                    "section_id": s["section_id"],
+                    "sentence_text": s["text"], 
+                    "word_count": s.get("word_count"),
+                    "sentence_order": s.get("order", 0)
+                })
+            
+            if sentences_to_insert:
+                logger.info(f"準備插入 {len(sentences_to_insert)} 個句子")
+                stmt = pg_insert(Sentence).values(sentences_to_insert)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['id'],
+                    set_={k: getattr(stmt.excluded, k) for k in sentences_to_insert[0] if k != 'id'}
+                )
+                result = await db.execute(stmt)
+                logger.info(f"句子插入完成，affected rows: {result.rowcount}")
+            else:
+                logger.error("沒有有效的句子資料可插入")
+                raise ValueError("句子資料為空或無效")
 
-        # 2. 批次插入句子
-        sentences_to_insert = [
-            {
-                "id": s["sentence_id"], "paper_id": paper_id, "section_id": s["section_id"],
-                "sentence_text": s["text"], "word_count": s.get("word_count")
-            } for s in sentences_data
-        ]
-        if sentences_to_insert:
-            stmt = pg_insert(Sentence).values(sentences_to_insert)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=['id'],
-                set_={k: getattr(stmt.excluded, k) for k in sentences_to_insert[0] if k != 'id'}
+            # 3. 更新論文狀態
+            await db.execute(
+                update(Paper).where(Paper.id == paper_id).values(
+                    sentences_processed=True, processing_status=status
+                )
             )
-            await db.execute(stmt)
-
-        # 3. 更新論文狀態
-        await db.execute(
-            update(Paper).where(Paper.id == paper_id).values(
-                sentences_processed=True, processing_status=status
+            
+            # 4. 關鍵修復：確保提交事務
+            await db.commit()
+            logger.info(f"章節和句子資料已成功提交到資料庫 - paper_id: {paper_id}")
+            
+            # 5. 驗證資料是否真的插入成功
+            sections_count = await db.execute(
+                select(func.count(PaperSection.id)).where(PaperSection.paper_id == paper_id)
             )
-        )
-        # No commit here
+            sentences_count = await db.execute(
+                select(func.count(Sentence.id)).where(Sentence.paper_id == paper_id)
+            )
+            
+            actual_sections = sections_count.scalar()
+            actual_sentences = sentences_count.scalar()
+            
+            logger.info(f"驗證結果 - paper_id: {paper_id}, 實際章節數: {actual_sections}, 實際句子數: {actual_sentences}")
+            
+            if actual_sections == 0 or actual_sentences == 0:
+                raise ValueError(f"資料驗證失敗 - sections: {actual_sections}, sentences: {actual_sentences}")
+                
+        except Exception as e:
+            logger.error(f"儲存章節和句子資料失敗 - paper_id: {paper_id}, 錯誤: {str(e)}", exc_info=True)
+            await db.rollback()
+            # 更新論文狀態為錯誤
+            await db.execute(
+                update(Paper).where(Paper.id == paper_id).values(
+                    processing_status="error", 
+                    error_message=f"章節和句子資料儲存失敗: {str(e)}"
+                )
+            )
+            await db.commit()
+            raise
 
     async def get_sentences_for_paper(self, db: AsyncSession, paper_id: str) -> List[Dict[str, Any]]:
         """獲取論文的所有句子以進行 OD/CD 分析"""

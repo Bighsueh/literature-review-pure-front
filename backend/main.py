@@ -40,6 +40,7 @@ from .core.database import init_database, close_database
 from .api.upload import router as files_router
 from .api.papers import router as papers_router
 from .api.processing import router as processing_router
+from .api.health import router as health_router
 
 
 # 設置日誌
@@ -59,6 +60,11 @@ async def lifespan(app: FastAPI):
         # 初始化資料庫
         await init_database()
         logger.info("資料庫初始化完成")
+        
+        # 執行自動遷移 (暫時註釋以便調試)
+        # from .database.migration_manager import auto_migrate
+        # await auto_migrate()
+        # logger.info("資料庫遷移完成")
         
         # 建立temp_files目錄
         import os
@@ -244,6 +250,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 app.include_router(files_router, prefix="/api", tags=["upload"])
 app.include_router(papers_router, prefix="/api", tags=["papers"])
 app.include_router(processing_router, prefix="/api", tags=["processing"])
+app.include_router(health_router, tags=["健康檢查"])
 
 
 @app.get("/")

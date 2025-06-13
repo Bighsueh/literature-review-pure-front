@@ -8,19 +8,22 @@ import time
 import json
 import uuid
 from typing import Dict, List, Any, Optional, Tuple
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 import os
+from sqlalchemy import select, and_, or_
+from sqlalchemy.sql import func
 
 from ..core.config import settings
 from ..core.logging import get_logger
-from .queue_service import queue_service, QueueTask, TaskStatus, TaskPriority, TaskProgress
-from .file_service import file_service
-from .grobid_service import grobid_service
-from .n8n_service import n8n_service
-from .db_service import db_service
-from .split_sentences_service import split_sentences_service
+from ..services.grobid_service import grobid_service
+from ..services.n8n_service import n8n_service
+from ..services.split_sentences_service import split_sentences_service
+from ..services.queue_service import queue_service, QueueTask, TaskPriority
+from ..services.db_service import db_service
+from ..core.database import get_db
+from ..models.paper import Paper, PaperSection, Sentence
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from ..database.connection import db_manager
 
 logger = get_logger("processing_service")
 
@@ -61,7 +64,8 @@ class ProcessingService:
         file_id: str,
         user_id: str = None,
         priority: TaskPriority = TaskPriority.NORMAL,
-        options: Dict[str, Any] = None
+        options: Dict[str, Any] = None,
+        session: Optional[AsyncSession] = None  # 新增可選的會話參數
     ) -> str:
         """
         開始檔案處理流程
@@ -71,10 +75,17 @@ class ProcessingService:
             user_id: 使用者ID
             priority: 任務優先序
             options: 處理選項
+            session: 可選的資料庫會話，如果提供則會在創建任務前確保提交
             
         Returns:
             任務ID
         """
+        # 如果有會話傳入，確保在創建任務前提交所有變更
+        if session:
+            if session.dirty or session.new or session.deleted:
+                await session.commit()
+                logger.debug("在創建處理任務前已提交會話變更")
+        
         processing_options = {
             "extract_keywords": True,
             "detect_od_cd": True,
@@ -109,7 +120,8 @@ class ProcessingService:
         options = task.data["options"]
         logger.info(f"開始處理檔案 (可恢復流程): {file_id}")
 
-        session = await db_manager.get_async_session()
+        from ..core.database import AsyncSessionLocal
+        session = AsyncSessionLocal()
         try:
             # 獲取最新的論文狀態
             paper = await db_service.get_paper_by_id(session, file_id)
@@ -142,18 +154,31 @@ class ProcessingService:
                 
                 # 使用 grobid_service 解析 XML 以獲取章節
                 sections = await grobid_service.parse_sections_from_xml(grobid_xml)
+                if not sections:
+                    raise ValueError(f"從 TEI XML 解析章節失敗: {file_id}")
+                
+                logger.info(f"從 TEI XML 解析出 {len(sections)} 個章節 - paper_id: {file_id}")
                 grobid_result_mock = {"sections": sections}
 
                 sections_analysis = await self._analyze_sections(grobid_result_mock, options)
+                if not sections_analysis:
+                    raise ValueError(f"章節分析失敗: {file_id}")
+                    
                 sentences_data = await self._extract_sentences(sections_analysis)
+                if not sentences_data:
+                    raise ValueError(f"句子提取失敗: {file_id}")
                 
-                # 增量儲存章節與句子
+                logger.info(f"準備儲存 {len(sections_analysis)} 個章節和 {len(sentences_data)} 個句子 - paper_id: {file_id}")
+                
+                # 增量儲存章節與句子 - 這裡會自動提交和驗證
                 await db_service.save_sections_and_sentences(
                     session,
                     paper_id=file_id,
                     sections_analysis=sections_analysis,
                     sentences_data=sentences_data,
                 )
+                
+                # 重新獲取論文狀態以確保更新
                 await session.commit()
                 paper = await db_service.get_paper_by_id(session, file_id)
                 logger.info(f"[進度] 章節與句子提取完成並已儲存: {file_id}")
@@ -161,7 +186,13 @@ class ProcessingService:
             # 步驟 3: OD/CD 檢測
             if not paper.od_cd_processed and options.get("detect_od_cd", True):
                 await queue_service.update_progress(task.task_id, step_name="OD/CD 檢測")
+                
+                # 驗證句子資料是否真的存在
                 all_sentences = await db_service.get_sentences_for_paper(session, file_id)
+                if not all_sentences:
+                    raise ValueError(f"無法獲取句子資料進行 OD/CD 檢測: {file_id}")
+                
+                logger.info(f"開始 OD/CD 檢測，句子數量: {len(all_sentences)} - paper_id: {file_id}")
                 
                 od_cd_results = await self._detect_od_cd(all_sentences, {}) # grobid_result 在此不需要
                 
@@ -174,7 +205,19 @@ class ProcessingService:
                 await session.commit()
                 logger.info(f"[進度] OD/CD 檢測完成並已儲存: {file_id}")
             
-            # 步驟 4: 最終處理與清理
+            # 步驟 4: 最終驗證與處理
+            await queue_service.update_progress(task.task_id, step_name="最終驗證")
+            
+            # 關鍵修復：在標記為完成前驗證所有資料真的存在
+            final_verification = await self._verify_processing_completion(session, file_id)
+            if not final_verification["success"]:
+                error_msg = f"處理完成驗證失敗: {final_verification['error']}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            logger.info(f"處理完成驗證通過 - {final_verification['summary']}")
+            
+            # 步驟 5: 完成處理與清理
             await queue_service.update_progress(task.task_id, step_name="完成處理")
             
             # 更新最終狀態
@@ -185,15 +228,17 @@ class ProcessingService:
             await self._cleanup_temp_files(file_info)
 
             logger.info(f"檔案處理完成: {file_id}")
-            return {"status": "completed", "file_id": file_id}
+            return {"status": "completed", "file_id": file_id, "verification": final_verification}
 
         except Exception as e:
             logger.error(f"檔案處理失敗: {file_id} - {e}", exc_info=True)
             # 在單獨的會話中更新錯誤狀態，以防主會話已回滾
-            error_session = await db_manager.get_async_session()
+            error_session = AsyncSessionLocal()
             try:
                 await db_service.update_paper_status(error_session, file_id, "error", str(e))
                 await error_session.commit()
+            except Exception as update_error:
+                logger.error(f"更新錯誤狀態失敗: {update_error}")
             finally:
                 await error_session.close()
             raise
@@ -696,7 +741,7 @@ class ProcessingService:
         keyword_results: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """使用SQLAlchemy ORM將處理結果存儲到資料庫"""
-        async with db_manager.get_async_session() as session:
+        async with AsyncSessionLocal() as session:
             try:
                 # 1. 更新Paper記錄
                 paper_update_data = {
@@ -813,11 +858,117 @@ class ProcessingService:
     async def _cleanup_temp_files(self, file_info: Dict[str, Any]):
         """清理暫存檔案"""
         try:
-            # 這裡可以清理 Grobid 產生的暫存檔案
-            # 目前 Grobid 服務自行管理暫存檔案，所以這裡暫時不做處理
-            logger.debug("暫存檔案清理完成")
+            file_path = file_info.get("file_path")
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"暫存檔案已清理: {file_path}")
         except Exception as e:
-            logger.warning(f"暫存檔案清理失敗: {e}")
+            logger.warning(f"清理暫存檔案失敗: {e}")
+    
+    async def _verify_processing_completion(self, db: AsyncSession, paper_id: str) -> Dict[str, Any]:
+        """驗證論文處理是否真正完成 - 關鍵的資料一致性檢查"""
+        try:
+            # 1. 檢查論文記錄
+            paper = await db_service.get_paper_by_id(db, paper_id)
+            if not paper:
+                return {"success": False, "error": "論文記錄不存在"}
+            
+            # 2. 檢查 TEI XML
+            if not paper.tei_xml or len(paper.tei_xml) < 1000:  # TEI XML 至少應該有基本結構
+                return {"success": False, "error": "TEI XML 缺失或太短"}
+            
+            # 3. 檢查章節資料
+            sections_query = select(func.count(PaperSection.id)).where(PaperSection.paper_id == paper_id)
+            sections_count = await db.execute(sections_query)
+            actual_sections = sections_count.scalar()
+            
+            if actual_sections == 0:
+                return {"success": False, "error": "章節資料完全缺失"}
+            
+            # 4. 檢查句子資料
+            sentences_query = select(func.count(Sentence.id)).where(Sentence.paper_id == paper_id)
+            sentences_count = await db.execute(sentences_query)
+            actual_sentences = sentences_count.scalar()
+            
+            if actual_sentences == 0:
+                return {"success": False, "error": "句子資料完全缺失"}
+            
+            # 5. 檢查章節和句子的關聯性
+            orphan_sentences_query = select(func.count(Sentence.id)).where(
+                and_(
+                    Sentence.paper_id == paper_id,
+                    ~Sentence.section_id.in_(
+                        select(PaperSection.id).where(PaperSection.paper_id == paper_id)
+                    )
+                )
+            )
+            orphan_sentences_count = await db.execute(orphan_sentences_query)
+            orphan_sentences = orphan_sentences_count.scalar()
+            
+            if orphan_sentences > 0:
+                return {"success": False, "error": f"發現 {orphan_sentences} 個孤立句子（沒有對應章節）"}
+            
+            # 6. 檢查處理狀態標記
+            if not paper.grobid_processed:
+                return {"success": False, "error": "Grobid 處理狀態未標記為完成"}
+            
+            if not paper.sentences_processed:
+                return {"success": False, "error": "句子處理狀態未標記為完成"}
+            
+            # 7. 檢查章節內容質量
+            empty_sections_query = select(func.count(PaperSection.id)).where(
+                and_(
+                    PaperSection.paper_id == paper_id,
+                    or_(
+                        PaperSection.content.is_(None),
+                        func.length(PaperSection.content) < 10
+                    )
+                )
+            )
+            empty_sections_count = await db.execute(empty_sections_query)
+            empty_sections = empty_sections_count.scalar()
+            
+            if empty_sections > actual_sections * 0.5:  # 如果超過50%的章節內容為空
+                return {"success": False, "error": f"過多空白章節: {empty_sections}/{actual_sections}"}
+            
+            # 8. 檢查句子內容質量
+            empty_sentences_query = select(func.count(Sentence.id)).where(
+                and_(
+                    Sentence.paper_id == paper_id,
+                    or_(
+                        Sentence.sentence_text.is_(None),
+                        func.length(Sentence.sentence_text) < 5
+                    )
+                )
+            )
+            empty_sentences_count = await db.execute(empty_sentences_query)
+            empty_sentences = empty_sentences_count.scalar()
+            
+            if empty_sentences > actual_sentences * 0.3:  # 如果超過30%的句子內容為空
+                return {"success": False, "error": f"過多空白句子: {empty_sentences}/{actual_sentences}"}
+            
+            # 9. 構建成功摘要
+            summary = {
+                "paper_id": paper_id,
+                "tei_xml_length": len(paper.tei_xml),
+                "sections_count": actual_sections,
+                "sentences_count": actual_sentences,
+                "empty_sections": empty_sections,
+                "empty_sentences": empty_sentences,
+                "grobid_processed": paper.grobid_processed,
+                "sentences_processed": paper.sentences_processed,
+                "od_cd_processed": paper.od_cd_processed
+            }
+            
+            return {
+                "success": True, 
+                "summary": f"驗證通過: {actual_sections} 章節, {actual_sentences} 句子",
+                "details": summary
+            }
+            
+        except Exception as e:
+            logger.error(f"處理完成驗證時發生錯誤: {e}", exc_info=True)
+            return {"success": False, "error": f"驗證過程發生錯誤: {str(e)}"}
     
     # ===== 批次處理功能 =====
     
