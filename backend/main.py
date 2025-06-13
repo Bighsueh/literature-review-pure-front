@@ -61,10 +61,13 @@ async def lifespan(app: FastAPI):
         await init_database()
         logger.info("資料庫初始化完成")
         
-        # 執行自動遷移 (暫時註釋以便調試)
-        # from .database.migration_manager import auto_migrate
-        # await auto_migrate()
-        # logger.info("資料庫遷移完成")
+        # 執行自動遷移檢查和執行
+        from .core.migration_manager import ensure_database_schema
+        schema_ok = await ensure_database_schema()
+        if schema_ok:
+            logger.info("資料庫結構檢查完成")
+        else:
+            logger.warning("資料庫結構檢查發現問題，但系統將繼續運行")
         
         # 建立temp_files目錄
         import os
