@@ -250,10 +250,11 @@ curl -X POST -H "Content-Type: application/json" \
 **描述：**
 此 workflow 接收「使用者查詢」與 **LLM 已挑選之 section 內容**，依 `analysis_focus` 執行**統一的多論文內容分析**，回傳整合後的回答、引用清單與來源統計。
 
-> ⚡ `analysis_focus` 現支援 **七種**：`locate_info`、`understand_content`、`cross_paper`、`definitions`、`methods`、`results`、`comparison`。
+> ⚡ `analysis_focus` 現支援 **八種**：`locate_info`、`understand_content`、`cross_paper`、`definitions`、`methods`、`results`、`comparison`、`other`。
 >
 > * 其中前三種對應 A‒C 三大核心需求（資訊定位／深度閱讀／跨文獻整合）。
-> * 後四種為較細緻的主題分析。
+> * 中間四種為較細緻的主題分析。
+> * `other` 為彈性分析類別，處理非標準化或客製化需求。
 
 ---
 
@@ -283,15 +284,15 @@ curl -X POST -H "Content-Type: application/json" \
 }
 ```
 
-| 欄位                 | 型別       | 描述                          | 範例／允許值                                                                                                      |
-| ------------------ | -------- | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `query`            | `string` | 使用者原始查詢                     | `"Locate operational definitions of adaptive expertise"`                                                    |
-| `selected_content` | `array`  | 由前序節點選出的 section 內容         | —                                                                                                           |
-|   `paper_name`     | `string` | 檔名或論文標題                     | `"smith2023.pdf"`                                                                                           |
-|   `section_type`   | `string` | IMRaD 章節或自訂分類               | `"method"`                                                                                                  |
-|   `content_type`   | `string` | section 的資料型別<sup>＊</sup>   | `"raw_text"` · `"definitions"` · `"methods"` · `"results"` · `"key_sentences"` …                            |
-|   `content`        | `object` | 內容本體（格式依 `content_type` 而異） | 例如 definitions 會是句子陣列、raw\_text 則是全文字串                                                                      |
-| `analysis_focus`   | `string` | **分析重點**                    | `locate_info` · `understand_content` · `cross_paper` · `definitions` · `methods` · `results` · `comparison` |
+| 欄位                 | 型別       | 描述                          | 範例／允許值                                                                                                                          |
+| ------------------ | -------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `query`            | `string` | 使用者原始查詢                     | `"Locate operational definitions of adaptive expertise"`                                                                        |
+| `selected_content` | `array`  | 由前序節點選出的 section 內容         | —                                                                                                                               |
+|   `paper_name`     | `string` | 檔名或論文標題                     | `"smith2023.pdf"`                                                                                                               |
+|   `section_type`   | `string` | IMRaD 章節或自訂分類               | `"method"`                                                                                                                      |
+|   `content_type`   | `string` | section 的資料型別<sup>＊</sup>   | `"raw_text"` · `"definitions"` · `"methods"` · `"results"` · `"key_sentences"` …                                                |
+|   `content`        | `object` | 內容本體（格式依 `content_type` 而異） | 例如 definitions 會是句子陣列、raw\_text 則是全文字串                                                                                          |
+| `analysis_focus`   | `string` | **分析重點**                    | `locate_info` · `understand_content` · `cross_paper` · `definitions` · `methods` · `results` · `comparison` · `other` |
 
 > **＊content\_type 說明**
 >
@@ -325,14 +326,14 @@ curl -X POST -H "Content-Type: application/json" \
 }
 ```
 
-| 欄位                                 | 型別         | 描述                                                                                                                                                                            | 備註                      |
-| ---------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `response`                         | `string`   | **AI 統整後回覆**，含 `[[ref:id]]` 引用標記。內容格式因 `analysis_focus` 而異：<br> - `locate_info` → Bullet / quote 句子清單<br> - `understand_content` → 條列摘要<br> - `cross_paper` → 可能含 Markdown 表格 | —                       |
-| `references`                       | `array`    | 依序列出所有引用來源                                                                                                                                                                    | `id` 應與 `[[ref:id]]` 對應 |
-| `source_summary.total_papers`      | `number`   | 參考之論文總數                                                                                                                                                                       | —                       |
-| `source_summary.papers_used`       | `string[]` | 實際被引用的檔名                                                                                                                                                                      | —                       |
-| `source_summary.sections_analyzed` | `string[]` | 分析過的章節種類                                                                                                                                                                      | —                       |
-| `source_summary.analysis_type`     | `string`   | 內部標記：<br>`locate_info` · `deep_reading` · `cross_paper` · `definition_comparison` · `method_review` · …                                                                       | 可供前端顯示或後續紀錄             |
+| 欄位                                 | 型別         | 描述                                                                                                                                                                                        | 備註                      |
+| ---------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `response`                         | `string`   | **AI 統整後回覆**，含 `[[ref:id]]` 引用標記。內容格式因 `analysis_focus` 而異：<br> - `locate_info` → Bullet / quote 句子清單<br> - `understand_content` → 條列摘要<br> - `cross_paper` → 可能含 Markdown 表格<br> - `other` → 依使用者需求客製化格式 | —                       |
+| `references`                       | `array`    | 依序列出所有引用來源                                                                                                                                                                                | `id` 應與 `[[ref:id]]` 對應 |
+| `source_summary.total_papers`      | `number`   | 參考之論文總數                                                                                                                                                                                   | —                       |
+| `source_summary.papers_used`       | `string[]` | 實際被引用的檔名                                                                                                                                                                                  | —                       |
+| `source_summary.sections_analyzed` | `string[]` | 分析過的章節種類                                                                                                                                                                                  | —                       |
+| `source_summary.analysis_type`     | `string`   | 內部標記：<br>`locate_info` · `deep_reading` · `cross_paper` · `definition_comparison` · `method_review` · `other_analysis` · …                                                                 | 可供前端顯示或後續紀錄             |
 
 ---
 
@@ -413,21 +414,74 @@ curl -X POST -H "Content-Type: application/json" \
   https://n8n.hsueh.tw/webhook/unified-content-analysis
 ```
 
+### 🛠 範例呼叫：`other`（彈性分析需求）
+
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  -d '{
+    "query": "請從創新理論的角度分析這些研究的貢獻，並評估其對未來研究方向的啟示",
+    "selected_content": [
+      {
+        "paper_name": "smith2023.pdf",
+        "section_type": "discussion",
+        "content_type": "raw_text",
+        "content": "Our findings contribute to the theoretical understanding of adaptive expertise by demonstrating..."
+      },
+      {
+        "paper_name": "lee2024.pdf",
+        "section_type": "conclusion",
+        "content_type": "key_sentences",
+        "content": [
+          {
+            "text": "Future research should explore the intersection of adaptive expertise and technology integration.",
+            "page_num": 15,
+            "id": "lee2024_conclusion_15"
+          }
+        ]
+      }
+    ],
+    "analysis_focus": "other"
+  }' \
+  https://n8n.hsueh.tw/webhook/unified-content-analysis
+```
+
+#### 可能回應
+
+```json
+{
+  "response": "從創新理論的角度分析，這些研究展現了三個重要貢獻：\n\n**理論創新層面**\n這些研究透過實證方法驗證了適應性專業知識的理論架構 [[ref:smith2023_discussion]]，為既有理論提供了新的實證基礎...\n\n**方法論突破**\n研究採用了跨領域的測量工具，為後續研究提供了方法論上的創新範例...\n\n**未來研究啟示**\n如 Lee et al. (2024) 所指出，未來研究應探索適應性專業知識與技術整合的交集 [[ref:lee2024_conclusion_15]]，這為該領域開啟了新的研究方向...",
+  "references": [
+    {
+      "id": "smith2023_discussion",
+      "paper_name": "smith2023.pdf",
+      "section_type": "discussion",
+      "page_num": 12,
+      "content_snippet": "Our findings contribute to the theoretical understanding of adaptive expertise by demonstrating..."
+    },
+    {
+      "id": "lee2024_conclusion_15",
+      "paper_name": "lee2024.pdf",
+      "section_type": "conclusion",
+      "page_num": 15,
+      "content_snippet": "Future research should explore the intersection of adaptive expertise and technology integration."
+    }
+  ],
+  "source_summary": {
+    "total_papers": 2,
+    "papers_used": ["smith2023.pdf", "lee2024.pdf"],
+    "sections_analyzed": ["discussion", "conclusion"],
+    "analysis_type": "other_analysis"
+  }
+}
+```
+
 ---
 
 > **備註**
 >
 > * `analysis_focus` 決定 LLM 在下游節點應用哪段 `analysisInstruction`。
 > * 若未傳入合法值，系統將 fallback 至 `default` 綜合分析邏輯。
-  }
-}
-```
-
-| 欄位名稱        | 型別     | 描述                                   | 範例                                                        |
-| :-------------- | :------- | :------------------------------------- | :---------------------------------------------------------- |
-| `response`      | `string` | AI 整理後的回覆文本，包含 [[ref:id]] 標記 | `"根據多篇文獻分析 [[ref:abc123]]，adaptive expertise的定義..."` |
-| `references`    | `array`  | 引用來源列表                            | 見上方JSON結構 |
-| `source_summary`| `object` | 來源摘要資訊                            | `{"total_papers": 3, "analysis_type": "definition_comparison"}` |
+> * `other` 類別適用於需要特殊分析視角或非標準化問題的情境，系統會根據使用者查詢的特性進行彈性分析。
 
 **範例呼叫：**
 
@@ -475,5 +529,3 @@ curl -X POST -H "Content-Type: application/json" \
     "analysis_type": "definition_comparison"
   }
 }
-```
-

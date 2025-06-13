@@ -31,6 +31,22 @@
 
 ## 快速開始
 
+### 環境配置
+
+首先創建 `.env` 文件來配置 API 端點：
+
+```bash
+# 複製範例配置文件
+cp .env.example .env
+
+# 編輯配置（根據您的後端部署地址）
+VITE_API_BASE_URL=http://localhost:28001/api
+VITE_WS_BASE_URL=ws://localhost:28001
+VITE_SPLIT_SENTENCES_BASE_URL=http://localhost:28000
+```
+
+> 📋 詳細的配置說明請參考 [API 配置文檔](docs/api-configuration.md)
+
 ### 安裝依賴
 
 ```bash
