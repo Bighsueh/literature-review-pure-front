@@ -137,7 +137,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           className={`rounded-lg px-4 py-3 shadow-sm transition-all duration-200 ${
             message.type === 'user' 
               ? 'bg-blue-500 text-white rounded-tr-none' 
-              : `bg-white text-gray-800 rounded-tl-none border-2 ${
+              : `bg-gray-50 text-gray-800 rounded-tl-none border-2 ${
                   isSelected 
                     ? 'border-blue-500 shadow-lg' 
                     : 'border-gray-200 hover:border-blue-300'
