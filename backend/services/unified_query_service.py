@@ -12,6 +12,7 @@ from backend.core.logging import get_logger
 from backend.services.n8n_service import n8n_service
 from backend.services.db_service import db_service
 from backend.core.exceptions import QueryProcessingError, DataValidationError
+from backend.core.database import get_db
 
 logger = get_logger(__name__)
 
@@ -157,7 +158,6 @@ class UnifiedQueryProcessor:
                         cd_count = len([s for s in sentences if s.get('defining_type') == 'CD'])
                         
                         section_summary = {
-                            'section_id': str(section.id),
                             'section_type': section.section_type,
                             'page_num': section.page_num or 0,
                             'word_count': len(section.content.split()) if section.content else 0,
@@ -191,54 +191,33 @@ class UnifiedQueryProcessor:
         query: str, 
         available_papers: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """智能章節選擇"""
-        try:
-            # 呼叫N8N智能章節選擇API
-            selection_result = await n8n_service.intelligent_section_selection(
-                query=query,
-                available_papers=available_papers,
-                max_sections=5  # 最多選擇5個章節
-            )
-            
-            logger.info(f"智能選擇了 {len(selection_result.get('selected_sections', []))} 個章節")
-            return selection_result
-            
-        except Exception as e:
-            logger.error(f"智能章節選擇失敗: {e}")
-            # 降級為簡單選擇策略
-            return self._fallback_section_selection(query, available_papers)
-    
-    def _fallback_section_selection(
-        self, 
-        query: str, 
-        available_papers: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """降級章節選擇策略"""
-        selected_sections = []
+        """智能章節選擇（移除降級處理，確保與 flowchart 一致）"""
         
-        # 簡單策略：選擇包含最多OD/CD的章節
-        for paper in available_papers:
-            for section in paper['sections']:
-                if section['od_count'] > 0 or section['cd_count'] > 0:
-                    selected_sections.append({
-                        'file_name': paper['file_name'],
-                        'paper_name': paper['file_name'],
-                        'section_id': section['section_id'],
-                        'section_type': section['section_type'],
-                        'page_num': section['page_num'],
-                        'relevance_score': section['od_count'] + section['cd_count'],
-                        'focus_type': 'definitions'
-                    })
+        # 呼叫N8N智能章節選擇API
+        selection_result = await n8n_service.intelligent_section_selection(
+            query=query,
+            available_papers=available_papers,
+            max_sections=5  # 最多選擇5個章節
+        )
         
-        # 按相關性排序並取前5個
-        selected_sections.sort(key=lambda x: x['relevance_score'], reverse=True)
-        selected_sections = selected_sections[:5]
+        # 檢查是否有錯誤
+        if 'error' in selection_result:
+            error_msg = f"智能章節選擇失敗: {selection_result['error']}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
         
-        return {
-            'selected_sections': selected_sections,
-            'analysis_focus': 'definitions',
-            'fallback_mode': True
-        }
+        # 驗證回應格式
+        expected_fields = ['selected_sections', 'analysis_focus', 'suggested_approach']
+        if not all(field in selection_result for field in expected_fields):
+            error_msg = f"智能章節選擇回應格式異常，缺少必要欄位: {expected_fields}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        selected_count = len(selection_result.get('selected_sections', []))
+        analysis_focus = selection_result['analysis_focus']
+        logger.info(f"智能章節選擇完成，選擇了 {selected_count} 個章節，分析重點: {analysis_focus}")
+        
+        return selection_result
     
     async def _extract_content(
         self, 
@@ -254,19 +233,22 @@ class UnifiedQueryProcessor:
         extracted_content = []
         
         for section in selected_sections:
-            section_id = section.get('section_id')
             paper_name = section.get('paper_name', section.get('file_name'))
             section_type = section.get('section_type')
             focus_type = section.get('focus_type', 'definitions')
             
+            if not paper_name or not section_type:
+                logger.warning(f"章節資料不完整: paper_name={paper_name}, section_type={section_type}")
+                continue
+            
             if focus_type == 'definitions':
-                content = await self._process_definitions_content(query, section_id, paper_name, section_type)
+                content = await self._process_definitions_content(query, paper_name, section_type)
                 if content:
                     extracted_content.append(content)
             else:
                 # 其他 focus_type 的處理框架
                 logger.info(f"暫不支援 focus_type: {focus_type}，使用預設處理")
-                content = await self._process_default_content(query, section_id, paper_name, section_type)
+                content = await self._process_default_content(query, paper_name, section_type)
                 if content:
                     extracted_content.append(content)
         
@@ -276,26 +258,27 @@ class UnifiedQueryProcessor:
     async def _process_definitions_content(
         self, 
         query: str, 
-        section_id: str, 
         paper_name: str, 
         section_type: str
     ) -> Optional[Dict[str, Any]]:
-        """處理 definitions 類型的內容"""
+        """處理 definitions 類型的內容（修正版本：不依賴 section_id）"""
         try:
             # 步驟1: 關鍵詞提取
             keywords = await n8n_service.extract_keywords(query)
             logger.info(f"提取到關鍵詞: {keywords}")
             
-            # 步驟2: 從資料庫取得該章節的所有句子
+            # 步驟2: 從資料庫根據 paper_name 和 section_type 取得該章節的所有句子
             async for db in get_db():
                 try:
-                    all_sentences = await db_service.get_sentences_by_section_id(db, section_id)
+                    all_sentences = await db_service.get_sentences_by_paper_and_section_type(
+                        db, paper_name, section_type
+                    )
                     
                     if not all_sentences:
-                        logger.warning(f"章節 {section_id} 沒有找到句子")
+                        logger.warning(f"論文 {paper_name} 的章節 {section_type} 沒有找到句子")
                         return None
                     
-                    logger.info(f"章節 {section_id} 取得 {len(all_sentences)} 個句子")
+                    logger.info(f"論文 {paper_name} 章節 {section_type} 取得 {len(all_sentences)} 個句子")
                     
                     # 步驟3: 全比對搜尋邏輯
                     matched_sentences = self._find_matching_sentences(all_sentences, keywords)
@@ -306,7 +289,7 @@ class UnifiedQueryProcessor:
                     logger.info(f"篩選出 {len(definition_sentences)} 個定義句子")
                     
                     if not definition_sentences:
-                        logger.warning(f"章節 {section_id} 沒有找到符合的定義句子")
+                        logger.warning(f"論文 {paper_name} 章節 {section_type} 沒有找到符合的定義句子")
                         return None
                     
                     # 步驟5: 構建 selected_content 格式
@@ -340,12 +323,11 @@ class UnifiedQueryProcessor:
     async def _process_default_content(
         self, 
         query: str, 
-        section_id: str, 
         paper_name: str, 
         section_type: str
     ) -> Optional[Dict[str, Any]]:
         """預設內容處理（框架）"""
-        logger.info(f"使用預設處理邏輯處理章節 {section_id}")
+        logger.info(f"使用預設處理邏輯處理章節 {section_type}")
         
         # 這裡是其他 focus_type 的處理邏輯框架
         # 目前返回簡化的內容
@@ -402,57 +384,53 @@ class UnifiedQueryProcessor:
         selected_content: List[Dict[str, Any]], 
         section_selection: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """統一內容分析"""
-        try:
-            analysis_focus = section_selection.get('analysis_focus', 'definitions')
-            logger.info(f"調用 N8N 統一內容分析，分析重點: {analysis_focus}")
-            
-            # 呼叫N8N統一內容分析API
-            analysis_result = await n8n_service.unified_content_analysis(
-                query=query,
-                selected_content=selected_content,
-                analysis_focus=analysis_focus
-            )
-            
-            logger.info(f"N8N統一內容分析完成，結果: {analysis_result}")
-            return analysis_result
-            
-        except Exception as e:
-            logger.error(f"統一內容分析失敗: {e}")
-            logger.info("使用降級處理...")
-            # 降級處理
-            fallback_result = self._fallback_content_analysis(query, selected_content)
-            logger.info(f"降級處理結果: {fallback_result}")
-            return fallback_result
-    
-    def _fallback_content_analysis(
-        self, 
-        query: str, 
-        selected_content: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """降級內容分析"""
-        # 簡單的內容整合
-        all_content = []
-        papers_used = set()
+        """統一內容分析（移除降級處理，確保與 flowchart 一致）"""
         
-        for content_group in selected_content:
-            papers_used.add(content_group['paper_name'])
-            for item in content_group['content']:
-                all_content.append(f"{item['text']} ({content_group['paper_name']})")
+        analysis_focus = section_selection.get('analysis_focus', 'understand_content')
         
-        response = f"根據 {len(papers_used)} 篇論文的分析，找到以下相關內容：\n" + "\n".join(all_content[:5])
+        # 確保 analysis_focus 使用正確的值 (根據 n8n_api_document.md 更新)
+        valid_analysis_focus = [
+            'locate_info', 'understand_content', 'cross_paper', 
+            'definitions', 'methods', 'results', 'comparison', 'other'
+        ]
         
-        return {
-            'response': response,
-            'references': [],
-            'source_summary': {
-                'total_papers': len(papers_used),
-                'papers_used': list(papers_used),
-                'sections_analyzed': len(selected_content),
-                'analysis_type': 'fallback'
-            },
-            'fallback_mode': True
-        }
+        if analysis_focus not in valid_analysis_focus:
+            logger.warning(f"無效的 analysis_focus: {analysis_focus}，使用預設值 'understand_content'")
+            analysis_focus = 'understand_content'
+        
+        # 檢查是否有內容可分析
+        if not selected_content:
+            error_msg = "沒有選中的內容，無法進行統一內容分析"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        logger.info(f"調用 N8N 統一內容分析，分析重點: {analysis_focus}, 內容數量: {len(selected_content)}")
+        
+        # 呼叫N8N統一內容分析API
+        analysis_result = await n8n_service.unified_content_analysis(
+            query=query,
+            selected_content=selected_content,
+            analysis_focus=analysis_focus
+        )
+        
+        # 檢查是否有錯誤
+        if 'error' in analysis_result:
+            error_msg = f"統一內容分析失敗: {analysis_result['error']}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        # 驗證回應格式
+        expected_fields = ['response', 'references', 'source_summary']
+        if not all(field in analysis_result for field in expected_fields):
+            error_msg = f"統一內容分析回應格式異常，缺少必要欄位: {expected_fields}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        reference_count = len(analysis_result['references'])
+        papers_analyzed = analysis_result['source_summary'].get('total_papers', 0)
+        logger.info(f"統一內容分析完成，生成 {reference_count} 個引用，分析 {papers_analyzed} 篇論文")
+        
+        return analysis_result
     
     def _update_average_time(self, processing_time: float):
         """更新平均處理時間"""

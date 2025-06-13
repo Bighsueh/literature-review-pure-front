@@ -80,10 +80,99 @@ class DatabaseManager:
             raise
     
     async def create_tables(self):
-        """建立資料庫表格（跳過已存在的表格）"""
+        """建立資料庫表格（使用Alembic migration）"""
+        logger.info("🚨 CREATE_TABLES 方法被調用！開始執行...")
         try:
+            logger.info("📋 執行Alembic遷移...")
+            
+            # 使用Alembic配置執行遷移
+            from alembic.config import Config
+            from alembic import command
+            import tempfile
+            import os
+            
+            # 取得migration目錄路徑
+            backend_dir = os.path.dirname(os.path.dirname(__file__))
+            migrations_dir = os.path.join(backend_dir, "migrations")
+            alembic_ini_path = os.path.join(backend_dir, "alembic.ini")
+            
+            logger.info(f"🔍 檢查Alembic設定檔案...")
+            logger.info(f"  - backend_dir: {backend_dir}")
+            logger.info(f"  - migrations_dir: {migrations_dir}")
+            logger.info(f"  - alembic_ini_path: {alembic_ini_path}")
+            
+            if not os.path.exists(alembic_ini_path):
+                logger.error(f"找不到alembic.ini檔案: {alembic_ini_path}")
+                raise FileNotFoundError(f"找不到alembic.ini檔案: {alembic_ini_path}")
+            
+            if not os.path.exists(migrations_dir):
+                logger.error(f"找不到migrations目錄: {migrations_dir}")
+                raise FileNotFoundError(f"找不到migrations目錄: {migrations_dir}")
+            
+            # 建立Alembic配置
+            logger.info("🔧 建立Alembic配置...")
+            alembic_cfg = Config(alembic_ini_path)
+            logger.info(f"📝 設定資料庫URL: {self.database_url}")
+            alembic_cfg.set_main_option("sqlalchemy.url", self.database_url)
+            
+            # 確保資料庫有alembic_version表，如果沒有則建立
+            try:
+                logger.info("🔍 檢查migration狀態...")
+                # 檢查是否需要初始化alembic_version表
+                from alembic.migration import MigrationContext
+                from alembic.operations import Operations
+                
+                with self.engine.connect() as connection:
+                    logger.info("✅ 資料庫連線成功，建立migration context...")
+                    context = MigrationContext.configure(connection)
+                    
+                    # 檢查是否已有migration記錄
+                    current_rev = context.get_current_revision()
+                    logger.info(f"📊 目前migration版本: {current_rev}")
+                    
+                    if current_rev is None:
+                        logger.info("�� 初始化Alembic版本控制...")
+                        # 標記為已執行最新migration
+                        command.stamp(alembic_cfg, "head")
+                        logger.info("✅ Alembic版本控制初始化完成")
+                    else:
+                        logger.info(f"📋 發現現有migration版本: {current_rev}")
+                        
+                    # 執行migration到最新版本
+                    logger.info("⬆️ 執行migration到最新版本...")
+                    command.upgrade(alembic_cfg, "head")
+                    logger.info("✅ Migration執行完成")
+                    
+            except Exception as migration_error:
+                logger.error(f"❌ Alembic遷移失敗: {migration_error}")
+                logger.error(f"❌ 錯誤類型: {type(migration_error).__name__}")
+                logger.error(f"❌ 錯誤詳情: {str(migration_error)}")
+                import traceback
+                logger.error(f"❌ 完整堆疊追蹤:")
+                logger.error(traceback.format_exc())
+                logger.info("🔄 回退到schema.sql方式...")
+                
+                # 如果migration失敗，回退到原來的schema.sql方式
+                await self._create_tables_from_schema()
+                
+            logger.info("✅ 資料庫表格建立成功")
+            
+        except Exception as e:
+            logger.error(f"❌ 建立資料庫表格失敗: {e}")
+            logger.error(f"❌ 錯誤類型: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ 完整堆疊追蹤:")
+            logger.error(traceback.format_exc())
+            raise
+
+    async def _create_tables_from_schema(self):
+        """從schema.sql建立資料庫表格（備用方法）"""
+        try:
+            logger.info("📋 執行主要資料庫schema...")
+            
             # 讀取schema.sql檔案
             schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
+            logger.info(f"SQL檔案執行中: {schema_path}")
             
             with open(schema_path, 'r', encoding='utf-8') as f:
                 schema_sql = f.read()
@@ -105,11 +194,11 @@ class DatabaseManager:
                             if "already exists" not in str(stmt_error):
                                 logger.warning(f"執行SQL語句時發生錯誤: {stmt_error}")
                                 logger.debug(f"出錯的SQL語句: {statement}")
-                        
-            logger.info("資料庫表格建立成功")
+                            
+            logger.info("✅ Schema.sql執行完成")
             
         except Exception as e:
-            logger.error(f"建立資料庫表格失敗: {e}")
+            logger.error(f"執行schema.sql失敗: {e}")
             raise
     
     async def check_connection(self) -> bool:

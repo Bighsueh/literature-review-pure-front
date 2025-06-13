@@ -298,8 +298,7 @@ class N8NService:
         request_data = {
             "query": query,
             "selected_content": selected_content,
-            "analysis_focus": analysis_focus,
-            "timestamp": datetime.now().isoformat()
+            "analysis_focus": analysis_focus
         }
         
         logger.info(f"執行統一內容分析，查詢: {query[:50]}..., 分析重點: {analysis_focus}")
@@ -943,8 +942,7 @@ class N8NService:
         request_data = {
             "query": query,
             "selected_content": selected_content,
-            "analysis_focus": analysis_focus,
-            "timestamp": datetime.now().isoformat()
+            "analysis_focus": analysis_focus
         }
         
         logger.info(f"執行統一內容分析，查詢: {query[:50]}..., 分析重點: {analysis_focus}")
