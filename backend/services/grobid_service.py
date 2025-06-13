@@ -9,6 +9,8 @@ import re
 import time
 import uuid
 from datetime import datetime
+import httpx
+from .pdf_analyzer import pdf_analyzer
 
 from ..core.config import settings
 from ..core.logging import get_logger
@@ -358,19 +360,38 @@ class GrobidService:
             return 'other'
     
     def _extract_page_info(self, element: Element) -> Optional[int]:
-        """提取頁碼資訊"""
+        """提取頁碼資訊 - 實用版本"""
         try:
-            # 查找座標資訊
+            # 方法1: 檢查元素本身的頁碼相關屬性
+            for attr in ['page', 'n', 'facs']:
+                if attr in element.attrib:
+                    try:
+                        page_num = int(element.get(attr))
+                        logger.info(f"從屬性 '{attr}' 獲得頁碼 {page_num}")
+                        return page_num
+                    except (ValueError, TypeError):
+                        pass
+            
+            # 方法2: 檢查座標資訊
             coords = element.get('coords')
             if coords:
-                # 解析座標格式 (通常包含頁碼)
                 parts = coords.split(',')
-                if len(parts) >= 5:  # 頁碼通常在第5個位置
-                    return int(parts[4])
-        except:
-            pass
-        
-        return None
+                if len(parts) >= 5:
+                    try:
+                        page_num = int(parts[4])
+                        logger.info(f"從座標獲得頁碼 {page_num}")
+                        return page_num
+                    except (ValueError, TypeError):
+                        pass
+            
+            # 方法3: 基於章節順序的實用估算
+            # 這是最可靠的方法，假設每頁包含約2-3個章節
+            # 我們可以從外部傳入章節索引來計算
+            return None  # 讓調用者處理估算
+            
+        except Exception as e:
+            logger.info(f"頁碼提取異常: {e}")
+            return None
     
     # ===== 高層級處理方法 =====
     
@@ -491,47 +512,143 @@ class GrobidService:
             logger.error(f"提取參考文獻失敗: {e}")
             return []
 
-    async def parse_sections_from_xml(self, xml_string: str) -> List[Dict[str, Any]]:
-        """從 TEI XML 字串中解析章節"""
+    async def parse_sections_from_xml(self, xml_string: str, pdf_path: Optional[str] = None) -> List[Dict[str, Any]]:
+        """從 TEI XML 字串中解析章節 - 整合 PDF 分析版本"""
         try:
             root = ET.fromstring(xml_string)
             ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
             
             sections = []
+            pdf_analysis = None
             
-            # 處理正文內容
-            body = root.find('.//tei:body', ns)
-            if body is not None:
-                for i, div in enumerate(body.findall('.//tei:div', ns)):
-                    head = div.find('tei:head', ns)
-                    title = head.text.strip() if head is not None and head.text else f"Untitled Section {i+1}"
-                    
-                    content_parts = []
-                    for p in div.findall('.//tei:p', ns):
-                        if p.text:
-                            content_parts.append(p.text.strip())
-                    
-                    content = "\n".join(filter(None, content_parts))
-                    
-                    if content: # 只添加有內容的章節
-                        sections.append({
-                            "title": title,
-                            "content": content,
-                            "section_type": head.get("type", "unknown") if head is not None else "unknown",
-                            "section_id": div.get('{http://www.w3.org/XML/1998/namespace}id', str(uuid.uuid4())),
-                            "order": i,
-                            "word_count": len(content.split())
-                        })
+            # 如果提供了 PDF 路徑，進行 PDF 分析
+            if pdf_path:
+                try:
+                    logger.info(f"開始 PDF 分析以獲取頁碼資訊: {pdf_path}")
+                    pdf_analysis = await pdf_analyzer.analyze_pdf(pdf_path)
+                    logger.info(f"PDF 分析完成，共 {pdf_analysis['total_pages']} 頁，{len(pdf_analysis['text_blocks'])} 個文本塊")
+                except Exception as e:
+                    logger.warning(f"PDF 分析失敗，將使用估算方法: {e}")
+                    pdf_analysis = None
             
-            logger.info(f"從 XML 中成功解析出 {len(sections)} 個章節")
+            # 使用完整的章節提取邏輯
+            # 查找所有章節 div 元素
+            div_elems = root.findall('.//tei:text//tei:div', ns)
+            
+            logger.info(f"找到 {len(div_elems)} 個章節 div 元素")
+            
+            for i, div in enumerate(div_elems):
+                section = {}
+                
+                # 提取章節標題
+                head_elem = div.find('./tei:head', ns)
+                if head_elem is not None and head_elem.text:
+                    title = self._clean_text(head_elem.text)
+                else:
+                    title = f"Section {i+1}"
+                
+                # 提取章節內容
+                content_parts = []
+                for p_elem in div.findall('.//tei:p', ns):
+                    if p_elem.text:
+                        content_parts.append(self._clean_text(p_elem.text))
+                
+                content = " ".join(content_parts).strip()
+                
+                if content:  # 只添加有內容的章節
+                    # 使用完整的章節類型分類
+                    section_type = self._classify_section_type(title)
+                    
+                    # 提取頁碼資訊 - 整合 PDF 分析
+                    page_num = await self._extract_page_info_with_pdf(
+                        div, title, content, i, len(div_elems), pdf_analysis
+                    )
+                    
+                    logger.info(f"章節 '{title}' 頁碼提取結果: {page_num}")
+                    
+                    # 構建完整的章節資訊
+                    section_data = {
+                        "title": title,
+                        "content": content,
+                        "section_type": section_type,  # 修復：使用正確的分類方法
+                        "page_num": page_num,          # 修復：添加頁碼資訊
+                        "section_id": div.get('{http://www.w3.org/XML/1998/namespace}id', str(uuid.uuid4())),
+                        "order": i + 1,                # 修復：從1開始計數
+                        "word_count": len(content.split()),
+                        "section_order": i + 1         # 添加相容性欄位
+                    }
+                    
+                    sections.append(section_data)
+                    logger.info(f"章節 {i+1}: '{title}' -> 類型: {section_type}, 頁碼: {page_num}, 字數: {section_data['word_count']}")
+            
+            logger.info(f"從 XML 中成功解析出 {len(sections)} 個有效章節")
             return sections
             
-        except ET.ParseError as e:
-            logger.error(f"解析 TEI XML 失敗: {e}")
-            return []
         except Exception as e:
-            logger.error(f"從 XML 解析章節時發生未知錯誤: {e}")
+            logger.error(f"解析 TEI XML 失敗: {e}", exc_info=True)
             return []
+
+    async def _extract_page_info_with_pdf(
+        self, 
+        element: ET.Element, 
+        title: str, 
+        content: str, 
+        section_index: int, 
+        total_sections: int, 
+        pdf_analysis: Optional[Dict[str, Any]]
+    ) -> int:
+        """
+        整合 PDF 分析的頁碼提取方法
+        
+        Args:
+            element: TEI XML 元素
+            title: 章節標題
+            content: 章節內容
+            section_index: 章節索引
+            total_sections: 總章節數
+            pdf_analysis: PDF 分析結果
+            
+        Returns:
+            頁碼
+        """
+        try:
+            # 方法1: 從 TEI XML 元素提取（原有方法）
+            page_num = self._extract_page_info(element)
+            if page_num and page_num > 0:
+                logger.info(f"從 TEI XML 獲得頁碼: {page_num}")
+                return page_num
+            
+            # 方法2: 使用 PDF 分析進行文本匹配
+            if pdf_analysis and pdf_analysis.get('text_blocks'):
+                # 嘗試標題匹配
+                title_page = pdf_analyzer.find_text_page(title, pdf_analysis['text_blocks'])
+                if title_page:
+                    logger.info(f"通過標題匹配獲得頁碼: {title_page}")
+                    return title_page
+                
+                # 嘗試內容匹配（使用內容的前100個字符）
+                content_sample = content[:100] if len(content) > 100 else content
+                content_page = pdf_analyzer.find_text_page(content_sample, pdf_analysis['text_blocks'])
+                if content_page:
+                    logger.info(f"通過內容匹配獲得頁碼: {content_page}")
+                    return content_page
+            
+            # 方法3: 基於 PDF 總頁數的智能估算
+            if pdf_analysis and pdf_analysis.get('total_pages'):
+                estimated_page = pdf_analyzer.estimate_page_from_position(
+                    section_index, total_sections, pdf_analysis['total_pages']
+                )
+                logger.info(f"基於 PDF 總頁數估算頁碼: {estimated_page}")
+                return estimated_page
+            
+            # 方法4: 基於章節順序的簡單估算（備用方案）
+            estimated_page = max(1, (section_index // 2) + 1)
+            logger.info(f"使用簡單順序估算頁碼: {estimated_page}")
+            return estimated_page
+            
+        except Exception as e:
+            logger.error(f"頁碼提取失敗: {e}")
+            return max(1, (section_index // 2) + 1)  # 備用方案
 
 # 建立服務實例
 grobid_service = GrobidService() 

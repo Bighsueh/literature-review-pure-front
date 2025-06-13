@@ -24,6 +24,7 @@ from ..services.db_service import db_service
 from ..core.database import get_db
 from ..models.paper import Paper, PaperSection, Sentence
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from pathlib import Path
 
 logger = get_logger("processing_service")
 
@@ -153,7 +154,9 @@ class ProcessingService:
                     raise ValueError(f"無法從資料庫獲取 TEI XML: {file_id}")
                 
                 # 使用 grobid_service 解析 XML 以獲取章節
-                sections = await grobid_service.parse_sections_from_xml(grobid_xml)
+                # 傳遞 PDF 路徑以進行頁碼分析
+                pdf_path = f"./temp_files/{paper.file_name}"
+                sections = await grobid_service.parse_sections_from_xml(grobid_xml, pdf_path)
                 if not sections:
                     raise ValueError(f"從 TEI XML 解析章節失敗: {file_id}")
                 
@@ -182,8 +185,28 @@ class ProcessingService:
                 await session.commit()
                 paper = await db_service.get_paper_by_id(session, file_id)
                 logger.info(f"[進度] 章節與句子提取完成並已儲存: {file_id}")
+            else:
+                # 步驟 2.5: 頁碼更新（可恢復流程中的額外步驟）
+                await queue_service.update_progress(task.task_id, step_name="頁碼資訊更新")
+                pdf_path = f"./temp_files/{paper.file_name}"
+                
+                # 檢查是否需要更新頁碼（如果所有章節的頁碼都是 NULL）
+                existing_sections = await db_service.get_sections_for_paper(session, file_id)
+                needs_page_update = any(section.page_num is None for section in existing_sections)
+                
+                if needs_page_update:
+                    logger.info(f"檢測到章節缺少頁碼資訊，開始 PDF 分析更新: {file_id}")
+                    page_update_success = await self._update_section_page_numbers(session, file_id, pdf_path)
+                    if page_update_success:
+                        logger.info(f"[進度] 頁碼資訊更新完成: {file_id}")
+                    else:
+                        logger.warning(f"頁碼資訊更新失敗，但不影響主流程: {file_id}")
+                else:
+                    logger.info(f"章節頁碼資訊已存在，跳過更新: {file_id}")
             
             # 步驟 3: OD/CD 檢測
+            # 重新獲取 paper 對象以避免異步問題
+            paper = await db_service.get_paper_by_id(session, file_id)
             if not paper.od_cd_processed and options.get("detect_od_cd", True):
                 await queue_service.update_progress(task.task_id, step_name="OD/CD 檢測")
                 
@@ -511,6 +534,7 @@ class ProcessingService:
                 "title": section.get("title", ""),
                 "content": section.get("content", ""),
                 "section_type": section.get("section_type", "other"),
+                "page_num": section.get("page_num"),
                 "word_count": section.get("word_count", 0),
                 "order": section.get("order", 0),
                 
@@ -770,7 +794,7 @@ class ProcessingService:
                         "id": section_data["section_id"],
                         "paper_id": paper_id,
                         "section_type": section_data["section_type"],
-                        "page_num": section_data.get("page"),
+                        "page_num": section_data.get("page_num"),
                         "content": section_data["content"],
                         "section_order": section_data.get("order"),
                         "word_count": section_data.get("word_count"),
@@ -1106,6 +1130,119 @@ class ProcessingService:
             logger.error(f"查詢處理狀態失敗: {e}")
         
         return None
+
+    async def _update_section_page_numbers(self, session: AsyncSession, paper_id: str, pdf_path: str) -> bool:
+        """
+        更新現有章節的頁碼資訊
+        
+        Args:
+            session: 資料庫會話
+            paper_id: 論文ID
+            pdf_path: PDF 檔案路徑
+            
+        Returns:
+            是否成功更新
+        """
+        try:
+            logger.info(f"開始更新章節頁碼資訊: {paper_id}")
+            
+            # 檢查 PDF 檔案是否存在
+            if not Path(pdf_path).exists():
+                logger.warning(f"PDF 檔案不存在，跳過頁碼更新: {pdf_path}")
+                return False
+            
+            # 獲取現有章節
+            existing_sections = await db_service.get_sections_for_paper(session, paper_id)
+            if not existing_sections:
+                logger.warning(f"沒有找到現有章節: {paper_id}")
+                return False
+            
+            logger.info(f"找到 {len(existing_sections)} 個現有章節，開始 PDF 分析")
+            
+            # 進行 PDF 分析
+            from .pdf_analyzer import pdf_analyzer
+            pdf_analysis = await pdf_analyzer.analyze_pdf(pdf_path)
+            
+            if not pdf_analysis or not pdf_analysis.get('text_blocks'):
+                logger.warning(f"PDF 分析失敗或沒有文本塊: {paper_id}")
+                return False
+            
+            logger.info(f"PDF 分析完成，共 {pdf_analysis['total_pages']} 頁，{len(pdf_analysis['text_blocks'])} 個文本塊")
+            
+            # 更新每個章節的頁碼
+            updated_count = 0
+            for i, section in enumerate(existing_sections):
+                try:
+                    # 使用 PDF 分析來確定頁碼
+                    page_num = await self._determine_page_number_for_section(
+                        section, i, len(existing_sections), pdf_analysis
+                    )
+                    
+                    if page_num and page_num != section.page_num:
+                        # 更新資料庫中的頁碼
+                        await db_service.update_section_page_number(session, section.id, page_num)
+                        updated_count += 1
+                        logger.info(f"更新章節 {i+1} 頁碼: {section.page_num} -> {page_num}")
+                    
+                except Exception as e:
+                    logger.error(f"更新章節 {i+1} 頁碼失敗: {e}")
+                    continue
+            
+            await session.commit()
+            logger.info(f"頁碼更新完成: {paper_id}, 更新了 {updated_count} 個章節")
+            return updated_count > 0
+            
+        except Exception as e:
+            logger.error(f"頁碼更新過程失敗: {paper_id} - {e}", exc_info=True)
+            await session.rollback()
+            return False
+    
+    async def _determine_page_number_for_section(
+        self, 
+        section: Any, 
+        section_index: int, 
+        total_sections: int, 
+        pdf_analysis: Dict[str, Any]
+    ) -> Optional[int]:
+        """
+        為單個章節確定頁碼
+        
+        Args:
+            section: 章節對象
+            section_index: 章節索引
+            total_sections: 總章節數
+            pdf_analysis: PDF 分析結果
+            
+        Returns:
+            頁碼
+        """
+        try:
+            from .pdf_analyzer import pdf_analyzer
+            
+            # 方法1: 通過內容匹配
+            if hasattr(section, 'content') and section.content:
+                content_sample = section.content[:100] if len(section.content) > 100 else section.content
+                content_page = pdf_analyzer.find_text_page(content_sample, pdf_analysis['text_blocks'])
+                if content_page:
+                    logger.debug(f"章節 {section_index+1} 通過內容匹配獲得頁碼: {content_page}")
+                    return content_page
+            
+            # 方法2: 基於 PDF 總頁數的智能估算
+            if pdf_analysis.get('total_pages'):
+                estimated_page = pdf_analyzer.estimate_page_from_position(
+                    section_index, total_sections, pdf_analysis['total_pages']
+                )
+                logger.debug(f"章節 {section_index+1} 基於位置估算頁碼: {estimated_page}")
+                return estimated_page
+            
+            # 方法3: 簡單估算（備用方案）
+            estimated_page = max(1, (section_index // 2) + 1)
+            logger.debug(f"章節 {section_index+1} 使用簡單估算頁碼: {estimated_page}")
+            return estimated_page
+            
+        except Exception as e:
+            logger.error(f"確定章節頁碼失敗: {e}")
+            return max(1, (section_index // 2) + 1)  # 備用方案
 
 # 建立服務實例
 processing_service = ProcessingService()

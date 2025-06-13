@@ -780,5 +780,25 @@ class DatabaseService:
             for paper_data in papers_dict.values()
         ]
 
+    async def get_sections_for_paper(self, db: AsyncSession, paper_id: str) -> List[PaperSection]:
+        """獲取論文的所有章節"""
+        query = (
+            select(PaperSection)
+            .where(PaperSection.paper_id == paper_id)
+            .order_by(PaperSection.section_order)
+        )
+        result = await db.execute(query)
+        return result.scalars().all()
+    
+    async def update_section_page_number(self, db: AsyncSession, section_id: str, page_num: int) -> bool:
+        """更新章節的頁碼"""
+        query = (
+            update(PaperSection)
+            .where(PaperSection.id == section_id)
+            .values(page_num=page_num)
+        )
+        result = await db.execute(query)
+        return result.rowcount > 0
+
 # 建立服務實例
 db_service = DatabaseService() 
