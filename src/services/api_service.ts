@@ -132,13 +132,16 @@ export interface Paper {
   sentence_count: number;
 }
 
+import { API_CONFIG, getWebSocketUrl } from '../config/api.config';
+
 class ApiService {
   private readonly baseUrl: string;
-  private readonly timeout: number = 30000; // 30 seconds
+  private readonly timeout: number;
 
   constructor() {
-    // 從環境變數或預設值獲取 API 基礎 URL
-    this.baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001/api';
+    // 使用統一的配置管理
+    this.baseUrl = API_CONFIG.API_BASE_URL;
+    this.timeout = API_CONFIG.API_TIMEOUT;
   }
 
   private async request<T>(
@@ -358,7 +361,7 @@ class ApiService {
    */
   createProcessingWebSocket(onMessage: (data: unknown) => void, onError?: (error: Event) => void): WebSocket | null {
     try {
-      const wsUrl = this.baseUrl.replace('http', 'ws') + '/processing/ws';
+      const wsUrl = getWebSocketUrl('/processing/ws');
       const ws = new WebSocket(wsUrl);
 
       ws.onmessage = (event) => {
