@@ -43,6 +43,10 @@ class MigrationManager:
         # 使用環境變數或預設的資料庫連接
         db_url = get_database_url().replace("+asyncpg", "")  # Alembic 需要同步連接
         config.set_main_option("sqlalchemy.url", db_url)
+        
+        # 設定正確的 migrations 目錄路徑
+        config.set_main_option("script_location", str(self.migrations_dir))
+        
         return config
     
     async def check_database_exists(self) -> bool:
