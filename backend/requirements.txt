@@ -24,6 +24,10 @@ requests==2.31.0
 aiofiles==23.2.1
 python-magic==0.4.27
 
+# PDF 處理
+PyMuPDF==1.23.8
+pdfplumber==0.10.3
+
 # XML/TEI處理
 lxml==4.9.3
 beautifulsoup4==4.12.2
@@ -33,6 +37,7 @@ apscheduler==3.10.4
 
 # 日誌與監控
 structlog==23.2.0
+psutil==5.9.6
 
 # 密碼學和雜湊
 # hashlib-compat==1.0.1  # 已包含在Python標準庫中

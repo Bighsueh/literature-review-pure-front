@@ -207,6 +207,13 @@ class QueueService:
     ) -> str:
         """添加任務到佇列"""
         async with self._lock:
+            # 檢查是否有相同的任務已經在處理或等待中
+            if file_id:
+                duplicate_task = await self._find_duplicate_task(file_id, task_type)
+                if duplicate_task:
+                    logger.warning(f"發現重複任務，跳過添加: {duplicate_task.task_id} (file_id: {file_id})")
+                    return duplicate_task.task_id
+            
             task_id = str(uuid.uuid4())
             
             task = QueueTask(
@@ -298,6 +305,15 @@ class QueueService:
             logger.warning(f"任務重試次數已達上限: {task_id}")
             return False
         
+        # 檢查特定的錯誤類型，決定是否應該重試
+        if task.error_message and any(error in task.error_message for error in [
+            "檔案記錄不存在於資料庫",
+            "檔案實體不存在",
+            "處理失敗，任務已停止"
+        ]):
+            logger.warning(f"任務包含不可重試錯誤，停止重試: {task_id} - {task.error_message}")
+            return False
+        
         async with self._lock:
             # 重置任務狀態
             task.status = TaskStatus.PENDING
@@ -316,6 +332,39 @@ class QueueService:
             
             logger.info(f"任務已重新加入佇列: {task_id} (重試次數: {task.retry_count})")
             return True
+    
+    async def _find_duplicate_task(self, file_id: str, task_type: str) -> Optional[QueueTask]:
+        """查找重複任務"""
+        # 檢查佇列中的任務
+        for task in self._queue:
+            if task.file_id == file_id and task.task_type == task_type and task.status == TaskStatus.PENDING:
+                return task
+        
+        # 檢查處理中的任務
+        for task in self._processing_tasks.values():
+            if task.file_id == file_id and task.task_type == task_type and task.status == TaskStatus.PROCESSING:
+                return task
+        
+        return None
+    
+    async def cleanup_failed_tasks(self, file_id: str = None):
+        """清理失敗的任務"""
+        async with self._lock:
+            tasks_to_remove = []
+            
+            # 從佇列中移除相關的失敗任務
+            for i, task in enumerate(self._queue):
+                if (file_id is None or task.file_id == file_id) and task.status in [TaskStatus.FAILED, TaskStatus.CANCELLED]:
+                    tasks_to_remove.append(i)
+            
+            # 倒序移除，避免索引問題
+            for i in reversed(tasks_to_remove):
+                removed_task = self._queue.pop(i)
+                self._completed_tasks[removed_task.task_id] = removed_task
+                logger.info(f"清理失敗任務: {removed_task.task_id}")
+            
+            # 更新統計
+            self._stats["queue_size"] = len(self._queue)
     
     # ===== 進度管理 =====
     
@@ -488,19 +537,29 @@ class QueueService:
             if task.retry_count < task.max_retries:
                 task.status = TaskStatus.RETRYING
                 task.retry_count += 1
-                # 重新加入佇列 (延遲重試)
-                await asyncio.sleep(2 ** task.retry_count)  # 指數退避
-                await self.add_task(
-                    task_type=task.task_type,
-                    data=task.data,
-                    priority=task.priority,
-                    user_id=task.user_id,
-                    file_id=task.file_id,
-                    parent_task_id=task.parent_task_id,
-                    max_retries=task.max_retries,
-                    timeout_seconds=task.timeout_seconds
-                )
+                task.started_at = None  # 重置開始時間
+                
+                # 指數退避延遲
+                delay = 2 ** task.retry_count
+                await asyncio.sleep(delay)
+                
+                # 重新加入佇列 (使用原任務，不創建新任務)
+                async with self._lock:
+                    task.status = TaskStatus.PENDING
+                    # 按優先序插入佇列
+                    inserted = False
+                    for i, queued_task in enumerate(self._queue):
+                        if task.priority.value < queued_task.priority.value:
+                            self._queue.insert(i, task)
+                            inserted = True
+                            break
+                    if not inserted:
+                        self._queue.append(task)
+                    
+                    self._stats["queue_size"] = len(self._queue)
+                
                 logger.warning(f"任務重試中: {task.task_id} (次數: {task.retry_count})")
+                return  # 重要：直接返回，不要移到完成列表
             else:
                 task.status = TaskStatus.FAILED
                 self._stats["failed_tasks"] += 1
@@ -589,8 +648,22 @@ class QueueService:
         
         return tasks
     
+    async def find_task_by_file_id(self, file_id: str) -> Optional[QueueTask]:
+        """根據 file_id 查找正在處理的任務"""
+        async with self._lock:
+            # 首先在處理中的任務裡尋找
+            for task in self._processing_tasks.values():
+                if task.file_id == file_id:
+                    return task
+            
+            # 如果不在處理中，可能在等待佇列裡
+            for task in self._queue:
+                if task.file_id == file_id:
+                    return task
+        return None
+    
     async def cleanup_old_tasks(self, days: int = 7):
-        """清理舊任務 (內存模式)"""
+        """清理舊的已完成任務"""
         cutoff_date = datetime.now() - timedelta(days=days)
         
         try:

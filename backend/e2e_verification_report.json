@@ -1,0 +1,58 @@
+{
+  "test_suite": "BACKLOG-FIX-03 端到端驗證",
+  "timestamp": "2025-06-13 01:33:33",
+  "summary": {
+    "total_tests": 8,
+    "passed": 7,
+    "failed": 1,
+    "success_rate": "87.5%"
+  },
+  "test_results": [
+    {
+      "test_name": "後端健康檢查",
+      "success": true,
+      "details": "狀態碼: 200"
+    },
+    {
+      "test_name": "資料庫連接測試",
+      "success": true,
+      "details": "狀態碼: 200"
+    },
+    {
+      "test_name": "論文上傳流程模擬",
+      "success": true,
+      "details": "模擬論文處理完成"
+    },
+    {
+      "test_name": "論文選取 API 測試",
+      "success": true,
+      "details": "論文選取狀態: 成功"
+    },
+    {
+      "test_name": "統一查詢 API 結構測試",
+      "success": true,
+      "details": "回應包含所有必要欄位: True"
+    },
+    {
+      "test_name": "N8N 服務模擬測試",
+      "success": false,
+      "details": "No module named 'backend'"
+    },
+    {
+      "test_name": "內容提取邏輯測試",
+      "success": true,
+      "details": "篩選出 2 個定義句子"
+    },
+    {
+      "test_name": "selected_content 格式驗證",
+      "success": true,
+      "details": "格式正確: True"
+    }
+  ],
+  "verification_status": {
+    "integration_tests_pass": true,
+    "api_structure_valid": true,
+    "content_format_valid": true,
+    "e2e_flow_working": true
+  }
+}

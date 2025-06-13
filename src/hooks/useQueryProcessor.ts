@@ -2,15 +2,12 @@
 import { useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { useAppStore } from '../stores/appStore';
-import { useFileStore } from '../stores/fileStore';
 import { useChatStore } from '../stores/chatStore';
-import { n8nAPI } from '../services/n8nAPI';
-import { ProcessedSentence } from '../types/file';
-import { Message, Conversation } from '../types/chat';
+import { apiService } from '../services/api_service';
+import { Message, Conversation, Reference } from '../types/chat';
 
 export const useQueryProcessor = () => {
   const { setProgress, setSelectedReferences } = useAppStore();
-  const { sentences } = useFileStore();
   const addMessage = useChatStore((state) => state.addMessage);
   const addConversation = useChatStore((state) => state.addConversation);
 
@@ -83,94 +80,31 @@ export const useQueryProcessor = () => {
       addMessage(activeConversationId, userMessage);
       console.log('Added user message to conversation:', activeConversationId, userMessage);
 
-      const startTime = Date.now();
       setProgress({
         currentStage: 'extracting',
-        percentage: 10,
-        details: '提取查詢關鍵詞...',
+        percentage: 20,
+        details: '查詢已送出，等待後端回應...',
         isProcessing: true
       });
 
-      const keywordResult = await n8nAPI.extractKeywords(queryText);
-      const keywords = keywordResult[0].output.keywords;
+      // 呼叫後端 /papers/unified-query
+      const apiResult = await apiService.query({ query: queryText });
 
-      setProgress({
-        currentStage: 'extracting',
-        percentage: 30,
-        details: { stage: '關鍵詞提取完成', keywords },
-        isProcessing: true
-      });
-
-      setProgress({
-        currentStage: 'searching',
-        percentage: 40,
-        details: '搜尋相關定義句子...',
-        isProcessing: true
-      });
-
-      const relevantSentences = searchLocalSentences(keywords, sentences);
-      const odSentences = relevantSentences.filter(s => s.type === 'OD');
-      const cdSentences = relevantSentences.filter(s => s.type === 'CD');
-
-      setProgress({
-        currentStage: 'searching',
-        percentage: 60,
-        details: { stage: '找到相關句子', odSentences, cdSentences, total: relevantSentences.length },
-        isProcessing: true
-      });
-
-      // 檢查是否有 OD 或 CD 類型的句子
-      if (odSentences.length === 0 && cdSentences.length === 0) {
-        const noResultsMessage: Message = {
-          id: uuidv4(),
-          type: 'system',
-          content: '抱歉，根據您的查詢，在當前文件中找不到相關的操作型定義（OD）或概念型定義（CD）。請嘗試不同的關鍵詞或上傳其他文件。',
-          timestamp: new Date(),
-          metadata: { query: queryText, keywords, processingTime: (Date.now() - startTime) / 1000 }
-        };
-        addMessage(activeConversationId, noResultsMessage);
-        setProgress({ currentStage: 'completed', percentage: 100, details: '找不到相關定義', isProcessing: false });
-        setSelectedReferences([]);
-        return;
+      if (!apiResult.success || !apiResult.data) {
+        throw new Error(apiResult.error || '後端查詢失敗');
       }
 
-      setProgress({
-        currentStage: 'generating',
-        percentage: 70,
-        details: '生成定義摘要...',
-        isProcessing: true
-      });
-
-      const organizeApiResult = await n8nAPI.organizeResponse({
-        "operational definition": odSentences.map(s => s.content),
-        "conceptual definition": cdSentences.map(s => s.content),
-        "query": queryText
-      });
-
-      const organizedContent = organizeApiResult[0]?.output?.response || '無法生成摘要。';
-
-      setProgress({
-        currentStage: 'generating',
-        percentage: 90,
-        details: { stage: '回應生成完成', response: organizedContent },
-        isProcessing: true
-      });
-
-      // 只保留 OD 和 CD 類型的句子作為引用
-      const validReferences = [...odSentences, ...cdSentences];
+      const { response, references } = apiResult.data;
 
       const systemMessage: Message = {
         id: uuidv4(),
         type: 'system',
-        content: organizedContent,
-        references: validReferences,
+        content: response,
+        references: references as unknown as Reference[],
+        timestamp: new Date(),
         metadata: {
-          query: queryText,
-          keywords,
-          relevantSentencesCount: validReferences.length,
-          processingTime: (Date.now() - startTime) / 1000,
-        },
-        timestamp: new Date()
+          query: queryText
+        }
       };
       addMessage(activeConversationId, systemMessage);
       console.log('Added system message to conversation:', activeConversationId, systemMessage);
@@ -181,7 +115,7 @@ export const useQueryProcessor = () => {
         details: '處理完成！',
         isProcessing: false
       });
-      setSelectedReferences(validReferences || []);
+      setSelectedReferences([]);
 
     } catch (error) {
       console.error('Error in processQuery:', error);
@@ -201,39 +135,7 @@ export const useQueryProcessor = () => {
         error: errorMessage,
       });
     }
-  }, [addMessage, addConversation, sentences, setProgress, setSelectedReferences]);
-
-  const searchLocalSentences = (keywords: string[], allSentences: ProcessedSentence[]): ProcessedSentence[] => {
-    if (!keywords || keywords.length === 0 || !allSentences || allSentences.length === 0) {
-      return [];
-    }
-  
-    const uniqueSentences = new Map<string, ProcessedSentence>();
-  
-    keywords.forEach(keyword => {
-      const regex = new RegExp(keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); // Escape special characters for regex
-      allSentences.forEach(sentence => {
-        if (regex.test(sentence.content)) {
-          if (!uniqueSentences.has(sentence.id)) {
-            uniqueSentences.set(sentence.id, sentence);
-          }
-        }
-      });
-    });
-  
-    const results = Array.from(uniqueSentences.values());
-    
-    results.sort((a, b) => {
-      const countA = keywords.filter(k => new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(a.content)).length;
-      const countB = keywords.filter(k => new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(b.content)).length;
-      if (countB !== countA) return countB - countA; // Higher count first
-      if (a.type === 'OD' && b.type !== 'OD') return -1; // OD prioritized
-      if (b.type === 'OD' && a.type !== 'OD') return 1;
-      return 0;
-    });
-
-    return results.slice(0, 20); // Limit to top 20 relevant sentences
-  };
+  }, [addMessage, addConversation, setProgress, setSelectedReferences]);
 
   return { processQuery };
 };

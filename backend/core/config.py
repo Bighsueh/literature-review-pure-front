@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     # 日誌設定
     log_level: str = os.getenv("LOG_LEVEL", "INFO" if not debug else "DEBUG")
     
+    # SQLAlchemy 日誌設定
+    sqlalchemy_echo: bool = os.getenv("SQLALCHEMY_ECHO", "true" if debug else "false").lower() == "true"
+    sqlalchemy_echo_pool: bool = os.getenv("SQLALCHEMY_ECHO_POOL", "true" if debug else "false").lower() == "true"
+    
     # 安全設定
     secret_key: str = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
     

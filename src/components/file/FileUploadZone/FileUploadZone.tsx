@@ -3,8 +3,7 @@ import {
   ArrowUpTrayIcon, 
   ExclamationTriangleIcon,
   CheckCircleIcon,
-  XCircleIcon,
-  ArrowPathIcon
+  XCircleIcon
 } from '@heroicons/react/24/outline';
 import { useAppStore } from '../../../stores/app_store';
 import ProgressBar from '../../common/ProgressBar/ProgressBar';
@@ -251,37 +250,23 @@ const FileUploadZone: React.FC<FileUploadZoneProps> = ({
       );
     }
 
-    // 顯示完成狀態
-    if (progress.currentStage === 'completed') {
-      return (
-        <div className="text-center">
-          <CheckCircleIcon className="mx-auto h-12 w-12 text-green-500" />
-          <h3 className="mt-2 text-sm font-medium text-green-900">上傳成功</h3>
-          <p className="mt-1 text-xs text-green-600">
-            {uploadState.currentFile?.name} 已成功處理
-          </p>
-        </div>
-      );
-    }
-
-    // 顯示錯誤狀態
+    // 顯示錯誤
     if (uploadState.error) {
       return (
-        <div className="text-center">
-          <XCircleIcon className="mx-auto h-12 w-12 text-red-500" />
-          <h3 className="mt-2 text-sm font-medium text-red-900">上傳失敗</h3>
-          <p className="mt-1 text-xs text-red-600">{uploadState.error}</p>
-          <div className="mt-4 flex justify-center space-x-2">
+        <div className="flex flex-col items-center justify-center h-full text-center">
+          <XCircleIcon className="w-12 h-12 text-red-400 mb-4" />
+          <h3 className="text-sm font-medium text-gray-900 mb-2">上傳失敗</h3>
+          <p className="text-xs text-red-600 mb-4 max-w-xs">{uploadState.error}</p>
+          <div className="flex gap-2">
             <button
               onClick={handleRetry}
-              className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
             >
-              <ArrowPathIcon className="w-4 h-4 mr-1" />
               重試
             </button>
             <button
               onClick={resetUploadState}
-              className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300"
             >
               取消
             </button>
@@ -289,81 +274,79 @@ const FileUploadZone: React.FC<FileUploadZoneProps> = ({
         </div>
       );
     }
-
+    
     // 顯示重複檔案警告
     if (uploadState.isDuplicate) {
       return (
-        <div className="text-center">
-          <ExclamationTriangleIcon className="mx-auto h-12 w-12 text-yellow-500" />
-          <h3 className="mt-2 text-sm font-medium text-yellow-900">發現重複檔案</h3>
-          <p className="mt-1 text-xs text-yellow-600">
-            系統中已存在相似的檔案：
+        <div className="flex flex-col items-center justify-center h-full text-center">
+          <ExclamationTriangleIcon className="w-12 h-12 text-yellow-400 mb-4" />
+          <h3 className="text-sm font-medium text-gray-900 mb-2">檔案可能已存在</h3>
+          <p className="text-xs text-gray-500 mb-4 max-w-xs">
+            系統中已存在名為 "{uploadState.duplicateFiles.join(', ')}" 的相似檔案。
           </p>
-          <ul className="mt-2 text-xs text-yellow-700">
-            {uploadState.duplicateFiles.map((fileName, index) => (
-              <li key={index} className="truncate">• {fileName}</li>
-            ))}
-          </ul>
-          <p className="mt-2 text-xs text-yellow-600">
-            確定要繼續上傳嗎？
-          </p>
-          <div className="mt-4 flex justify-center space-x-2">
+          <div className="flex gap-2">
             <button
               onClick={handleConfirmDuplicate}
-              className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500"
+              className="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-md hover:bg-yellow-600"
             >
               繼續上傳
             </button>
             <button
               onClick={resetUploadState}
-              className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300"
             >
               取消
             </button>
           </div>
+        </div>
+      );
+    }
+
+    // 上傳成功
+    if (progress.currentStage === 'completed' && !uploadState.isUploading) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-center">
+          <CheckCircleIcon className="w-12 h-12 text-green-400 mb-4" />
+          <h3 className="text-sm font-medium text-gray-900">處理成功</h3>
+          <p className="text-xs text-gray-500">
+            檔案 "{uploadState.currentFile?.name}" 已成功上傳並處理。
+          </p>
         </div>
       );
     }
 
     // 預設狀態
     return (
-      <>
-        <ArrowUpTrayIcon className="mx-auto h-12 w-12 text-gray-400" />
-        <h3 className="mt-2 text-sm font-medium text-gray-900">拖放檔案到這裡</h3>
-        <p className="mt-1 text-xs text-gray-500">
-          或點擊上傳 PDF 檔案 (最大 50MB)
+      <div className="flex flex-col items-center justify-center h-full text-center" id="file-upload-zone">
+        <ArrowUpTrayIcon className="w-12 h-12 text-gray-400" />
+        <p className="mt-4 text-sm font-medium text-gray-900">
+          拖放檔案到這裡
         </p>
-        <div className="mt-4">
-          <label htmlFor="file-upload" className="cursor-pointer bg-white py-2 px-3 border border-gray-300 rounded-md shadow-sm text-sm leading-4 font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-            選擇檔案
-            <input
-              id="file-upload"
-              name="file-upload"
-              type="file"
-              className="sr-only"
-              onChange={handleFileChange}
-              accept="application/pdf"
-              disabled={uploadState.isUploading}
-            />
-          </label>
-        </div>
-      </>
+        <p className="mt-1 text-xs text-gray-500">
+          或點擊上傳 PDF 檔案
+        </p>
+        <label htmlFor="file-upload" className="mt-4 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 cursor-pointer">
+          選擇檔案
+        </label>
+      </div>
     );
   };
 
   return (
-    <div 
-      id="file-upload-zone"
-      className={`
-        border-2 border-dashed rounded-lg p-6 text-center min-h-[200px] flex flex-col justify-center
-        ${getDragOverStyle()}
-        transition-all duration-200 ease-in-out
-        ${uploadState.isUploading ? 'pointer-events-none' : ''}
-      `}
+    <div
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      className={`relative border-2 border-dashed rounded-xl p-4 transition-all duration-300 ease-in-out h-64 flex items-center justify-center ${getDragOverStyle()}`}
     >
+      <input
+        type="file"
+        id="file-upload"
+        className="hidden"
+        onChange={handleFileChange}
+        accept="application/pdf"
+        disabled={uploadState.isUploading}
+      />
       {renderContent()}
     </div>
   );

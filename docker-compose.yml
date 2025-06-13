@@ -48,23 +48,23 @@ services:
       - app-network
 
   # React前端 (開發模式)
-  react-dev:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    container_name: react-frontend-dev
-    ports:
-      - "5173:5173"
-    volumes:
-      - .:/app
-      - /app/node_modules
-    environment:
-      - NODE_ENV=development
-      - VITE_API_BASE_URL=http://localhost:8001/api
-    depends_on:
-      - backend
-    networks:
-      - app-network
+  # react-dev:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.dev
+  #   container_name: react-frontend-dev
+  #   ports:
+  #     - "5173:5173"
+  #   volumes:
+  #     - .:/app
+  #     - /app/node_modules
+  #   environment:
+  #     - NODE_ENV=development
+  #     - VITE_API_BASE_URL=http://localhost:8001/api
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - app-network
 
   # React frontend service (production build)
   react:

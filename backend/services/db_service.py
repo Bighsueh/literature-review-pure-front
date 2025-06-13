@@ -1,18 +1,23 @@
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
-from sqlalchemy import select, update, delete, and_, or_, func, desc
-from sqlalchemy.exc import IntegrityError
-from typing import List, Optional, Dict, Any
+import asyncio
+import time
+from uuid import UUID
+from typing import List, Dict, Any, Optional
 from datetime import datetime
-import uuid
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete, desc, and_, or_, func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..models.paper import (
-    Paper, PaperSection, Sentence, PaperSelection, ProcessingQueue, SystemSettings,
-    PaperCreate, PaperUpdate, SectionCreate, SentenceCreate, 
-    ProcessingQueueCreate, ProcessingQueueUpdate, PaperSelectionUpdate,
-    PaperResponse, SectionResponse, SentenceResponse, ProcessingQueueResponse,
-    SectionSummary, PaperSectionSummary
+    Paper, PaperSection, Sentence, PaperSelection, ProcessingQueue,
+    PaperCreate, PaperUpdate, PaperResponse,
+    SectionCreate, SectionResponse,
+    SentenceCreate, SentenceResponse,
+    ProcessingQueueCreate, ProcessingQueueResponse,
+    PaperSectionSummary, SectionSummary
 )
+from ..core.logging import get_logger
+
+logger = get_logger(__name__)
 
 class DatabaseService:
     """資料庫服務類，處理所有資料庫操作"""
@@ -51,16 +56,24 @@ class DatabaseService:
         return result.scalar_one_or_none()
     
     async def get_all_papers(self, db: AsyncSession) -> List[Dict[str, Any]]:
-        """取得所有論文，包含選取狀態"""
+        """取得所有論文，包含選取狀態和正確的統計數據"""
         query = (
-            select(Paper, PaperSelection.is_selected)
+            select(
+                Paper, 
+                PaperSelection.is_selected,
+                func.count(func.distinct(PaperSection.id)).label('section_count'),
+                func.count(func.distinct(Sentence.id)).label('sentence_count')
+            )
             .outerjoin(PaperSelection, Paper.id == PaperSelection.paper_id)
+            .outerjoin(PaperSection, Paper.id == PaperSection.paper_id)
+            .outerjoin(Sentence, Paper.id == Sentence.paper_id)
+            .group_by(Paper.id, PaperSelection.is_selected)
             .order_by(desc(Paper.created_at))
         )
         result = await db.execute(query)
         papers = []
         
-        for paper, is_selected in result:
+        for paper, is_selected, section_count, sentence_count in result:
             paper_dict = {
                 "id": str(paper.id),
                 "title": paper.original_filename or paper.file_name,
@@ -70,8 +83,8 @@ class DatabaseService:
                 "processing_status": paper.processing_status,
                 "selected": is_selected if is_selected is not None else False,
                 "authors": [],  # Placeholder, to be implemented
-                "section_count": 0,  # Placeholder, to be implemented
-                "sentence_count": 0,  # Placeholder, to be implemented
+                "section_count": section_count or 0,  # 修復：使用真實計數
+                "sentence_count": sentence_count or 0,  # 修復：使用真實計數
                 
                 # Keep original fields for compatibility if needed elsewhere
                 "original_filename": paper.original_filename,
@@ -106,6 +119,164 @@ class DatabaseService:
         await db.commit()
         return result.rowcount > 0
     
+    async def update_paper_grobid_results(self, db: AsyncSession, paper_id: str, grobid_result: Dict[str, Any], status: str = "processing"):
+        """保存 Grobid 處理結果並更新狀態"""
+        update_data = {
+            "processing_status": status,
+            "grobid_processed": True,
+            "tei_xml": grobid_result.get("tei_xml"),
+            "tei_metadata": {
+                "title": grobid_result.get("title"),
+                "authors": grobid_result.get("authors", []),
+                "abstract": grobid_result.get("abstract"),
+            },
+        }
+        await db.execute(
+            update(Paper).where(Paper.id == paper_id).values(**update_data)
+        )
+        # No commit here, part of a larger transaction
+
+    async def get_paper_tei_xml(self, db: AsyncSession, paper_id: str) -> Optional[str]:
+        """從資料庫獲取 TEI XML"""
+        query = select(Paper.tei_xml).where(Paper.id == paper_id)
+        result = await db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def save_sections_and_sentences(self, db: AsyncSession, paper_id: str, sections_analysis: List[Dict[str, Any]], sentences_data: List[Dict[str, Any]], status: str = "processing"):
+        """保存章節和句子資料"""
+        logger.info(f"開始儲存章節和句子資料 - paper_id: {paper_id}, sections: {len(sections_analysis)}, sentences: {len(sentences_data)}")
+        
+        try:
+            # 1. 批次插入章節
+            sections_to_insert = []
+            for s in sections_analysis:
+                if not s.get("section_id") or not s.get("content"):
+                    logger.warning(f"跳過無效章節資料: {s}")
+                    continue
+                    
+                sections_to_insert.append({
+                    "id": s["section_id"], 
+                    "paper_id": paper_id, 
+                    "section_type": s["section_type"],
+                    "content": s["content"], 
+                    "section_order": s.get("order"), 
+                    "word_count": s.get("word_count")
+                })
+            
+            if sections_to_insert:
+                logger.info(f"準備插入 {len(sections_to_insert)} 個章節")
+                stmt = pg_insert(PaperSection).values(sections_to_insert)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['id'],
+                    set_={k: getattr(stmt.excluded, k) for k in sections_to_insert[0] if k != 'id'}
+                )
+                result = await db.execute(stmt)
+                logger.info(f"章節插入完成，affected rows: {result.rowcount}")
+            else:
+                logger.error("沒有有效的章節資料可插入")
+                raise ValueError("章節資料為空或無效")
+
+            # 2. 批次插入句子
+            sentences_to_insert = []
+            for s in sentences_data:
+                if not s.get("sentence_id") or not s.get("text"):
+                    logger.warning(f"跳過無效句子資料: {s}")
+                    continue
+                    
+                sentences_to_insert.append({
+                    "id": s["sentence_id"], 
+                    "paper_id": paper_id, 
+                    "section_id": s["section_id"],
+                    "sentence_text": s["text"], 
+                    "word_count": s.get("word_count"),
+                    "sentence_order": s.get("order", 0)
+                })
+            
+            if sentences_to_insert:
+                logger.info(f"準備插入 {len(sentences_to_insert)} 個句子")
+                stmt = pg_insert(Sentence).values(sentences_to_insert)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['id'],
+                    set_={k: getattr(stmt.excluded, k) for k in sentences_to_insert[0] if k != 'id'}
+                )
+                result = await db.execute(stmt)
+                logger.info(f"句子插入完成，affected rows: {result.rowcount}")
+            else:
+                logger.error("沒有有效的句子資料可插入")
+                raise ValueError("句子資料為空或無效")
+
+            # 3. 更新論文狀態
+            await db.execute(
+                update(Paper).where(Paper.id == paper_id).values(
+                    sentences_processed=True, processing_status=status
+                )
+            )
+            
+            # 4. 關鍵修復：確保提交事務
+            await db.commit()
+            logger.info(f"章節和句子資料已成功提交到資料庫 - paper_id: {paper_id}")
+            
+            # 5. 驗證資料是否真的插入成功
+            sections_count = await db.execute(
+                select(func.count(PaperSection.id)).where(PaperSection.paper_id == paper_id)
+            )
+            sentences_count = await db.execute(
+                select(func.count(Sentence.id)).where(Sentence.paper_id == paper_id)
+            )
+            
+            actual_sections = sections_count.scalar()
+            actual_sentences = sentences_count.scalar()
+            
+            logger.info(f"驗證結果 - paper_id: {paper_id}, 實際章節數: {actual_sections}, 實際句子數: {actual_sentences}")
+            
+            if actual_sections == 0 or actual_sentences == 0:
+                raise ValueError(f"資料驗證失敗 - sections: {actual_sections}, sentences: {actual_sentences}")
+                
+        except Exception as e:
+            logger.error(f"儲存章節和句子資料失敗 - paper_id: {paper_id}, 錯誤: {str(e)}", exc_info=True)
+            await db.rollback()
+            # 更新論文狀態為錯誤
+            await db.execute(
+                update(Paper).where(Paper.id == paper_id).values(
+                    processing_status="error", 
+                    error_message=f"章節和句子資料儲存失敗: {str(e)}"
+                )
+            )
+            await db.commit()
+            raise
+
+    async def get_sentences_for_paper(self, db: AsyncSession, paper_id: str) -> List[Dict[str, Any]]:
+        """獲取論文的所有句子以進行 OD/CD 分析"""
+        query = select(Sentence).where(Sentence.paper_id == paper_id)
+        result = await db.execute(query)
+        return [
+            {
+                "id": str(s.id), "text": s.sentence_text, "section_id": str(s.section_id)
+            } for s in result.scalars().all()
+        ]
+
+    async def save_od_cd_results(self, db: AsyncSession, paper_id: str, od_cd_results: List[Dict[str, Any]], status: str = "processing"):
+        """增量更新句子的 OD/CD 分析結果"""
+        update_statements = [
+            update(Sentence).where(Sentence.id == result['id']).values(
+                defining_type=result.get("od_cd_type", "UNKNOWN"),
+                analysis_reason=result.get("explanation", ""),
+                confidence_score=result.get("confidence", 0.0),
+                detection_status=result.get("detection_status", "success")
+            ) for result in od_cd_results
+        ]
+        if update_statements:
+            for stmt in update_statements:
+                await db.execute(stmt)
+
+        # 更新論文主記錄狀態
+        await db.execute(
+            update(Paper).where(Paper.id == paper_id).values(
+                od_cd_processed=True, processing_status=status
+            )
+        )
+        # No commit here
+
     async def delete_paper(self, db: AsyncSession, paper_id: str) -> bool:
         """刪除論文及其所有相關資料"""
         try:
@@ -268,58 +439,162 @@ class DatabaseService:
             }
             for sentence in sentences
         ]
+
+    async def get_sentences_by_section_id(self, db: AsyncSession, section_id: str) -> List[Dict[str, Any]]:
+        """取得章節的所有句子"""
+        query = (
+            select(Sentence)
+            .where(Sentence.section_id == section_id)
+            .order_by(Sentence.sentence_order)
+        )
+        result = await db.execute(query)
+        sentences = result.scalars().all()
+        
+        return [
+            {
+                "text": sentence.sentence_text,
+                "page_num": sentence.page_num,
+                "defining_type": sentence.defining_type,
+                "sentence_order": sentence.sentence_order,
+                "id": str(sentence.id)
+            }
+            for sentence in sentences
+        ]
     
     # ===== Paper Selection Management =====
     
     async def get_selected_papers(self, db: AsyncSession) -> List[PaperResponse]:
         """取得已選取的論文"""
-        query = (
-            select(Paper)
-            .join(PaperSelection, Paper.id == PaperSelection.paper_id)
-            .where(PaperSelection.is_selected == True)
-            .order_by(desc(Paper.created_at))
-        )
-        result = await db.execute(query)
-        papers = result.scalars().all()
-        
-        return [
-            PaperResponse(
-                **{
-                    "id": str(paper.id),
-                    "file_name": paper.file_name,
-                    "original_filename": paper.original_filename,
-                    "file_size": paper.file_size,
-                    "upload_timestamp": paper.upload_timestamp,
-                    "processing_status": paper.processing_status,
-                    "grobid_processed": paper.grobid_processed,
-                    "sentences_processed": paper.sentences_processed,
-                    "pdf_deleted": paper.pdf_deleted,
-                    "error_message": paper.error_message,
-                    "processing_completed_at": paper.processing_completed_at,
-                    "created_at": paper.created_at,
-                    "is_selected": True
-                }
+        try:
+            logger.info("開始查詢已選取的論文")
+            
+            query = (
+                select(Paper)
+                .join(PaperSelection, Paper.id == PaperSelection.paper_id)
+                .where(PaperSelection.is_selected == True)
+                .order_by(desc(Paper.created_at))
             )
-            for paper in papers
-        ]
+            result = await db.execute(query)
+            papers = result.scalars().all()
+            
+            logger.info(f"查詢到 {len(papers)} 篇已選取的論文")
+            
+            # 添加詳細的狀態檢查
+            completed_papers = []
+            for paper in papers:
+                logger.debug(f"檢查論文: {paper.original_filename or paper.file_name}")
+                logger.debug(f"  - ID: {paper.id}")
+                logger.debug(f"  - 處理狀態: {paper.processing_status}")
+                logger.debug(f"  - Grobid處理: {paper.grobid_processed}")
+                logger.debug(f"  - 句子處理: {paper.sentences_processed}")
+                logger.debug(f"  - OD/CD處理: {paper.od_cd_processed}")
+                
+                # 確保只返回處理完成的論文
+                if paper.processing_status == 'completed':
+                    completed_papers.append(paper)
+                else:
+                    logger.warning(f"論文 {paper.original_filename or paper.file_name} 狀態為 {paper.processing_status}，跳過")
+            
+            logger.info(f"返回 {len(completed_papers)} 篇已完成處理的論文")
+            
+            # 手動建立 PaperResponse，確保 UUID 正確轉換為字串
+            return [
+                PaperResponse(
+                    id=str(paper.id),
+                    file_name=paper.file_name,
+                    original_filename=paper.original_filename,
+                    file_size=paper.file_size,
+                    upload_timestamp=paper.upload_timestamp,
+                    processing_status=paper.processing_status,
+                    grobid_processed=paper.grobid_processed,
+                    sentences_processed=paper.sentences_processed,
+                    od_cd_processed=paper.od_cd_processed,
+                    pdf_deleted=paper.pdf_deleted,
+                    error_message=paper.error_message,
+                    processing_completed_at=paper.processing_completed_at,
+                    created_at=paper.created_at,
+                    is_selected=True
+                )
+                for paper in completed_papers
+            ]
+            
+        except Exception as e:
+            logger.error(f"取得已選取論文失敗: {e}", exc_info=True)
+            # 返回空列表而不是拋出異常，確保系統穩定性
+            return []
     
     async def set_paper_selection(self, db: AsyncSession, paper_id: str, is_selected: bool) -> bool:
         """設定論文選取狀態"""
-        # 先嘗試更新
-        update_query = (
-            update(PaperSelection)
-            .where(PaperSelection.paper_id == paper_id)
-            .values(is_selected=is_selected, selected_timestamp=func.current_timestamp())
-        )
-        result = await db.execute(update_query)
+        start_time = time.time()
+        logger.info(f"開始設定論文選取狀態 - paper_id: {paper_id}, is_selected: {is_selected}")
         
-        # 如果沒有更新到任何記錄，表示不存在，需要建立新記錄
-        if result.rowcount == 0:
-            selection = PaperSelection(paper_id=paper_id, is_selected=is_selected)
-            db.add(selection)
-        
-        await db.commit()
-        return True
+        try:
+            # 驗證 paper_id 格式
+            try:
+                UUID(paper_id)
+            except ValueError:
+                logger.error(f"無效的論文ID格式: {paper_id}")
+                return False
+            
+            # 使用超時保護包裝資料庫操作
+            async def _perform_database_operation():
+                # 先嘗試更新現有記錄
+                logger.debug(f"嘗試更新現有選取記錄 - paper_id: {paper_id}")
+                update_query = (
+                    update(PaperSelection)
+                    .where(PaperSelection.paper_id == paper_id)
+                    .values(is_selected=is_selected, selected_timestamp=func.current_timestamp())
+                )
+                result = await db.execute(update_query)
+                
+                # 如果沒有更新到任何記錄，表示不存在，需要建立新記錄
+                if result.rowcount == 0:
+                    logger.debug(f"創建新的選取記錄 - paper_id: {paper_id}")
+                    selection = PaperSelection(paper_id=paper_id, is_selected=is_selected)
+                    db.add(selection)
+                
+                # 提交事務
+                logger.debug(f"提交資料庫事務 - paper_id: {paper_id}")
+                await db.commit()
+                return result.rowcount
+            
+            # 設定5秒超時
+            try:
+                updated_rows = await asyncio.wait_for(_perform_database_operation(), timeout=5.0)
+                processing_time = time.time() - start_time
+                
+                if updated_rows == 0:
+                    logger.info(f"創建新選取記錄成功 - paper_id: {paper_id}, is_selected: {is_selected}, 處理時間: {processing_time:.3f}s")
+                else:
+                    logger.info(f"更新現有選取記錄成功 - paper_id: {paper_id}, is_selected: {is_selected}, 處理時間: {processing_time:.3f}s")
+                
+                return True
+                
+            except asyncio.TimeoutError:
+                processing_time = time.time() - start_time
+                logger.error(f"資料庫操作超時 - paper_id: {paper_id}, 超時時間: 5秒, 實際處理時間: {processing_time:.3f}s")
+                
+                # 嘗試回滾事務
+                try:
+                    await db.rollback()
+                    logger.debug(f"事務回滾成功 - paper_id: {paper_id}")
+                except Exception as rollback_error:
+                    logger.error(f"事務回滾失敗 - paper_id: {paper_id}, 錯誤: {rollback_error}")
+                
+                return False
+                
+        except Exception as e:
+            processing_time = time.time() - start_time
+            logger.error(f"設定論文選取狀態發生錯誤 - paper_id: {paper_id}, 錯誤: {str(e)}, 類型: {type(e).__name__}, 處理時間: {processing_time:.3f}s", exc_info=True)
+            
+            # 嘗試回滾事務
+            try:
+                await db.rollback()
+                logger.debug(f"錯誤後事務回滾成功 - paper_id: {paper_id}")
+            except Exception as rollback_error:
+                logger.error(f"錯誤後事務回滾失敗 - paper_id: {paper_id}, 回滾錯誤: {rollback_error}")
+            
+            return False
     
     async def mark_paper_selected(self, db: AsyncSession, paper_id: str) -> bool:
         """標記論文為已選取"""
@@ -531,6 +806,26 @@ class DatabaseService:
             PaperSectionSummary(**paper_data) 
             for paper_data in papers_dict.values()
         ]
+
+    async def get_sections_for_paper(self, db: AsyncSession, paper_id: str) -> List[PaperSection]:
+        """獲取論文的所有章節"""
+        query = (
+            select(PaperSection)
+            .where(PaperSection.paper_id == paper_id)
+            .order_by(PaperSection.section_order)
+        )
+        result = await db.execute(query)
+        return result.scalars().all()
+    
+    async def update_section_page_number(self, db: AsyncSession, section_id: str, page_num: int) -> bool:
+        """更新章節的頁碼"""
+        query = (
+            update(PaperSection)
+            .where(PaperSection.id == section_id)
+            .values(page_num=page_num)
+        )
+        result = await db.execute(query)
+        return result.rowcount > 0
 
 # 建立服務實例
 db_service = DatabaseService() 

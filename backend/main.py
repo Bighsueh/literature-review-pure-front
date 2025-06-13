@@ -40,6 +40,7 @@ from .core.database import init_database, close_database
 from .api.upload import router as files_router
 from .api.papers import router as papers_router
 from .api.processing import router as processing_router
+from .api.health import router as health_router
 
 
 # 設置日誌
@@ -60,10 +61,20 @@ async def lifespan(app: FastAPI):
         await init_database()
         logger.info("資料庫初始化完成")
         
+        # 執行自動遷移 (暫時註釋以便調試)
+        # from .database.migration_manager import auto_migrate
+        # await auto_migrate()
+        # logger.info("資料庫遷移完成")
+        
         # 建立temp_files目錄
         import os
         os.makedirs(settings.temp_files_dir, exist_ok=True)
         logger.info(f"暫存檔案目錄已準備: {settings.temp_files_dir}")
+        
+        # 初始化處理服務 (會自動註冊任務處理器)
+        from .services.processing_service import ProcessingService
+        processing_service = ProcessingService()
+        logger.info("檔案處理服務已初始化")
         
         # 啟動佇列處理服務
         from .services.queue_service import queue_service
@@ -214,42 +225,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # 添加 JSON 解析錯誤處理器
 @app.middleware("http")
 async def json_parsing_middleware(request: Request, call_next):
-    """JSON 解析錯誤中間件"""
+    """簡化的 JSON 解析錯誤中間件"""
     content_type = request.headers.get("content-type", "")
     
     # 如果是檔案上傳請求，則跳過 JSON 解析
     if "multipart/form-data" in content_type:
         return await call_next(request)
-        
-    try:
-        # 對於需要 JSON 的請求，預先檢查 JSON 格式
-        if request.method in ["POST", "PUT", "PATCH"] and "application/json" in content_type:
-            body = await request.body()
-            if body:
-                try:
-                    json.loads(body)
-                except json.JSONDecodeError as e:
-                    logger.warning(f"無效的 JSON 格式: {e}", extra={"body": body.decode('utf-8', errors='ignore')})
-                    return JSONResponse(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        content={
-                            "detail": "無效的 JSON 格式",
-                            "error_code": "INVALID_JSON",
-                            "details": {"message": "請求包含無效的 JSON 資料"}
-                        }
-                    )
-            # 重建請求以供後續處理
-            request._body = body
-        
-        response = await call_next(request)
-        return response
     
-    except Exception as e:
-        logger.error(f"JSON 解析中間件錯誤: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": "內部伺服器錯誤", "error_code": "UNEXPECTED_ERROR"}
-        )
+    # 對於其他請求，直接處理，讓 FastAPI 自己處理 JSON 解析
+    return await call_next(request)
 
 
 @app.exception_handler(Exception)
@@ -266,6 +250,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 app.include_router(files_router, prefix="/api", tags=["upload"])
 app.include_router(papers_router, prefix="/api", tags=["papers"])
 app.include_router(processing_router, prefix="/api", tags=["processing"])
+app.include_router(health_router, tags=["健康檢查"])
 
 
 @app.get("/")
