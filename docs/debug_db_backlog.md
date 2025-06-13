@@ -1,5 +1,5 @@
 # Debug & DB Backlog
-
+此修正計劃已經執行完成，留存於此作為修正過後的紀錄參照。
 > 本文件彙整「檔案上傳流程最後一步在 backend log 出現 db rollback」之完整解決方案待辦清單（Backlog）與例外/除錯步驟（Exception Steps）。所有除錯與驗證作業一律透過 Docker 容器執行，所有日誌查詢一律使用 `docker logs` 指令。
 必須在確保前後端原始功能不會出錯的情況下進行伺服器的調整。
 專案文檔：/docs

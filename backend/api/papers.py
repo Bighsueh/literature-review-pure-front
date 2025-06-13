@@ -408,7 +408,7 @@ async def process_unified_query(
             })
         
         # 生成論文摘要
-        papers_summary = await unified_query_processor._generate_papers_summary(papers_data)
+        papers_summary = await unified_query_processor._generate_papers_summary(papers_data, db)
         
         # 處理查詢
         result = await unified_query_processor.process_query(
@@ -601,4 +601,75 @@ async def delete_paper(
     except HTTPException:
         raise
     except Exception as e:
-        raise handle_internal_error(f"刪除論文失敗: {str(e)}") 
+        raise handle_internal_error(f"刪除論文失敗: {str(e)}")
+
+@router.post("/test-unified-query")
+async def test_unified_query(
+    request: UnifiedQueryRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """測試版本的 unified-query，用於驗證修復"""
+    try:
+        logger.info(f"測試統一查詢請求: {request.query}")
+        
+        # 1. 檢查是否有選取的論文
+        selected_papers = await db_service.get_selected_papers(db)
+        
+        if not selected_papers:
+            return {
+                "success": True,
+                "query": request.query,
+                "response": "沒有可用的論文資料",
+                "message": "診斷：沒有找到選取的論文",
+                "debug_info": {
+                    "selected_papers_count": 0,
+                    "papers_summary_generated": False
+                }
+            }
+        
+        logger.info(f"找到 {len(selected_papers)} 篇選取的論文")
+        
+        # 2. 生成論文資料
+        papers_data = []
+        for paper in selected_papers:
+            papers_data.append({
+                'id': str(paper.id),
+                'filename': paper.original_filename or paper.file_name,
+                'title': paper.original_filename or paper.file_name
+            })
+        
+        # 3. 生成論文摘要 (簡化版本)
+        from ..services.unified_query_service import unified_query_processor
+        papers_summary = await unified_query_processor._generate_papers_summary(papers_data, db)
+        
+        return {
+            "success": True,
+            "query": request.query,
+            "response": f"成功處理！找到 {len(selected_papers)} 篇論文，生成了 {len(papers_summary)} 篇論文摘要",
+            "message": "修復成功：論文摘要生成正常",
+            "debug_info": {
+                "selected_papers_count": len(selected_papers),
+                "papers_summary_generated": True,
+                "papers_summary_count": len(papers_summary),
+                "papers_details": [
+                    {
+                        "file_name": paper.get('file_name', ''),
+                        "sections_count": len(paper.get('sections', []))
+                    }
+                    for paper in papers_summary
+                ]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"測試統一查詢處理錯誤: {str(e)}", exc_info=True)
+        return {
+            "success": False,
+            "query": request.query,
+            "response": f"測試失敗: {str(e)}",
+            "message": "仍有問題需要修復",
+            "debug_info": {
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+        } 

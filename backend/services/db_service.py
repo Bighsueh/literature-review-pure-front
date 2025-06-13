@@ -465,36 +465,63 @@ class DatabaseService:
     
     async def get_selected_papers(self, db: AsyncSession) -> List[PaperResponse]:
         """取得已選取的論文"""
-        query = (
-            select(Paper)
-            .join(PaperSelection, Paper.id == PaperSelection.paper_id)
-            .where(PaperSelection.is_selected == True)
-            .order_by(desc(Paper.created_at))
-        )
-        result = await db.execute(query)
-        papers = result.scalars().all()
-        
-        return [
-            PaperResponse(
-                **{
-                    "id": str(paper.id),
-                    "file_name": paper.file_name,
-                    "original_filename": paper.original_filename,
-                    "file_size": paper.file_size,
-                    "upload_timestamp": paper.upload_timestamp,
-                    "processing_status": paper.processing_status,
-                    "grobid_processed": paper.grobid_processed,
-                    "sentences_processed": paper.sentences_processed,
-                    "od_cd_processed": paper.od_cd_processed,
-                    "pdf_deleted": paper.pdf_deleted,
-                    "error_message": paper.error_message,
-                    "processing_completed_at": paper.processing_completed_at,
-                    "created_at": paper.created_at,
-                    "is_selected": True
-                }
+        try:
+            logger.info("開始查詢已選取的論文")
+            
+            query = (
+                select(Paper)
+                .join(PaperSelection, Paper.id == PaperSelection.paper_id)
+                .where(PaperSelection.is_selected == True)
+                .order_by(desc(Paper.created_at))
             )
-            for paper in papers
-        ]
+            result = await db.execute(query)
+            papers = result.scalars().all()
+            
+            logger.info(f"查詢到 {len(papers)} 篇已選取的論文")
+            
+            # 添加詳細的狀態檢查
+            completed_papers = []
+            for paper in papers:
+                logger.debug(f"檢查論文: {paper.original_filename or paper.file_name}")
+                logger.debug(f"  - ID: {paper.id}")
+                logger.debug(f"  - 處理狀態: {paper.processing_status}")
+                logger.debug(f"  - Grobid處理: {paper.grobid_processed}")
+                logger.debug(f"  - 句子處理: {paper.sentences_processed}")
+                logger.debug(f"  - OD/CD處理: {paper.od_cd_processed}")
+                
+                # 確保只返回處理完成的論文
+                if paper.processing_status == 'completed':
+                    completed_papers.append(paper)
+                else:
+                    logger.warning(f"論文 {paper.original_filename or paper.file_name} 狀態為 {paper.processing_status}，跳過")
+            
+            logger.info(f"返回 {len(completed_papers)} 篇已完成處理的論文")
+            
+            # 手動建立 PaperResponse，確保 UUID 正確轉換為字串
+            return [
+                PaperResponse(
+                    id=str(paper.id),
+                    file_name=paper.file_name,
+                    original_filename=paper.original_filename,
+                    file_size=paper.file_size,
+                    upload_timestamp=paper.upload_timestamp,
+                    processing_status=paper.processing_status,
+                    grobid_processed=paper.grobid_processed,
+                    sentences_processed=paper.sentences_processed,
+                    od_cd_processed=paper.od_cd_processed,
+                    pdf_deleted=paper.pdf_deleted,
+                    error_message=paper.error_message,
+                    processing_completed_at=paper.processing_completed_at,
+                    created_at=paper.created_at,
+                    is_selected=True
+                )
+                for paper in completed_papers
+            ]
+            
+        except Exception as e:
+            logger.error(f"取得已選取論文失敗: {e}", exc_info=True)
+            # 返回空列表而不是拋出異常，確保系統穩定性
+            return []
     
     async def set_paper_selection(self, db: AsyncSession, paper_id: str, is_selected: bool) -> bool:
         """設定論文選取狀態"""

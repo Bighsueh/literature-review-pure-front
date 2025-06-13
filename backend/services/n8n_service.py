@@ -897,15 +897,21 @@ class N8NService:
                 timeout=120  # 智能選擇可能需要更長時間
             )
             
+            # 處理 N8N 回應格式 - 可能包裝在 output 中
+            if 'output' in result:
+                actual_result = result['output']
+            else:
+                actual_result = result
+            
             # 驗證回應格式符合API文檔
             expected_fields = ['selected_sections', 'analysis_focus', 'suggested_approach']
-            if all(field in result for field in expected_fields):
-                selected_count = len(result['selected_sections'])
-                analysis_focus = result['analysis_focus']
+            if all(field in actual_result for field in expected_fields):
+                selected_count = len(actual_result['selected_sections'])
+                analysis_focus = actual_result['analysis_focus']
                 logger.info(f"智能章節選擇完成，選擇了 {selected_count} 個章節，分析重點: {analysis_focus}")
-                return result
+                return actual_result
             else:
-                logger.warning("智能章節選擇回應格式異常")
+                logger.warning(f"智能章節選擇回應格式異常，期望欄位: {expected_fields}, 實際欄位: {list(actual_result.keys())}")
                 return {"error": "回應格式異常", "raw_response": result}
                 
         except Exception as e:
@@ -950,15 +956,21 @@ class N8NService:
                 timeout=180  # 多論文內容分析需要更長時間
             )
             
+            # 處理 N8N 回應格式 - 可能包裝在 output 中
+            if 'output' in result:
+                actual_result = result['output']
+            else:
+                actual_result = result
+            
             # 驗證回應格式符合API文檔
             expected_fields = ['response', 'references', 'source_summary']
-            if all(field in result for field in expected_fields):
-                reference_count = len(result['references'])
-                papers_analyzed = result['source_summary'].get('total_papers', 0)
+            if all(field in actual_result for field in expected_fields):
+                reference_count = len(actual_result['references'])
+                papers_analyzed = actual_result['source_summary'].get('total_papers', 0)
                 logger.info(f"統一內容分析完成，生成 {reference_count} 個引用，分析 {papers_analyzed} 篇論文")
-                return result
+                return actual_result
             else:
-                logger.warning("統一內容分析回應格式異常")
+                logger.warning(f"統一內容分析回應格式異常，期望欄位: {expected_fields}, 實際欄位: {list(actual_result.keys())}")
                 return {"error": "回應格式異常", "raw_response": result}
                 
         except Exception as e:
@@ -1001,15 +1013,21 @@ class N8NService:
                 timeout=240  # 多檔案處理需要更長時間
             )
             
+            # 處理 N8N 回應格式 - 可能包裝在 output 中
+            if 'output' in result:
+                actual_result = result['output']
+            else:
+                actual_result = result
+            
             # 驗證回應格式符合API文檔
             expected_fields = ['response', 'references', 'source_summary']
-            if all(field in result for field in expected_fields):
-                reference_count = len(result['references'])
-                papers_used = len(result['source_summary'].get('papers_used', []))
+            if all(field in actual_result for field in expected_fields):
+                reference_count = len(actual_result['references'])
+                papers_used = len(actual_result['source_summary'].get('papers_used', []))
                 logger.info(f"增強型組織回應完成，生成 {reference_count} 個引用，使用 {papers_used} 篇論文")
-                return result
+                return actual_result
             else:
-                logger.warning("增強型組織回應格式異常")
+                logger.warning(f"增強型組織回應格式異常，期望欄位: {expected_fields}, 實際欄位: {list(actual_result.keys())}")
                 return {"error": "回應格式異常", "raw_response": result}
                 
         except Exception as e:

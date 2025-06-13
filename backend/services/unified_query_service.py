@@ -6,6 +6,7 @@
 import asyncio
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.logging import get_logger
 from backend.services.n8n_service import n8n_service
@@ -67,15 +68,18 @@ class UnifiedQueryProcessor:
                 query, papers_summary
             )
             
-            # 步驟2: 提取選中的內容 (簡化版本)
-            selected_content = self._extract_content_from_summary(
-                section_selection, papers_summary
+            # 步驟2: 提取選中的內容
+            selected_sections = section_selection.get('selected_sections', [])
+            selected_content = await self._extract_content(
+                query, selected_sections
             )
             
             # 步驟3: 統一內容分析
+            logger.info(f"即將進行統一內容分析，selected_content: {len(selected_content)} 項")
             analysis_result = await self._unified_content_analysis(
                 query, selected_content, section_selection
             )
+            logger.info(f"統一內容分析返回結果: {analysis_result}")
             
             # 記錄成功統計
             processing_time = (datetime.now() - start_time).total_seconds()
@@ -119,15 +123,22 @@ class UnifiedQueryProcessor:
     
     async def _generate_papers_summary(
         self, 
-        papers_data: List[Dict[str, Any]]
+        papers_data: List[Dict[str, Any]],
+        session: AsyncSession
     ) -> List[Dict[str, Any]]:
         """生成論文section摘要"""
         available_papers = []
         
         for paper in papers_data:
             try:
-                # 獲取論文的章節資訊
-                sections = await db_service.get_paper_sections(paper['id'])
+                logger.info(f"處理論文摘要: {paper['filename']}")
+                
+                # 獲取論文的章節資訊 - 使用正確的方法
+                sections = await db_service.get_sections_for_paper(session, paper['id'])
+                
+                if not sections:
+                    logger.warning(f"論文 {paper['filename']} 沒有章節資料")
+                    continue
                 
                 paper_summary = {
                     'file_name': paper['filename'],
@@ -137,28 +148,39 @@ class UnifiedQueryProcessor:
                 }
                 
                 for section in sections:
-                    # 計算OD/CD統計
-                    sentences = await db_service.get_section_sentences(section['id'])
-                    od_count = len([s for s in sentences if s.get('od_cd_label') == 'OD'])
-                    cd_count = len([s for s in sentences if s.get('od_cd_label') == 'CD'])
-                    
-                    section_summary = {
-                        'section_id': section['id'],
-                        'section_type': section['section_type'],
-                        'page_num': section.get('page_num', 0),
-                        'word_count': len(section.get('content', '').split()),
-                        'brief_content': section.get('content', '')[:200] + "...",
-                        'od_count': od_count,
-                        'cd_count': cd_count,
-                        'total_sentences': len(sentences)
-                    }
-                    
-                    paper_summary['sections'].append(section_summary)
+                    try:
+                        # 獲取章節句子 - 使用正確的方法
+                        sentences = await db_service.get_sentences_by_section_id(session, str(section.id))
+                        
+                        # 計算OD/CD統計
+                        od_count = len([s for s in sentences if s.get('defining_type') == 'OD'])
+                        cd_count = len([s for s in sentences if s.get('defining_type') == 'CD'])
+                        
+                        section_summary = {
+                            'section_id': str(section.id),
+                            'section_type': section.section_type,
+                            'page_num': section.page_num or 0,
+                            'word_count': len(section.content.split()) if section.content else 0,
+                            'brief_content': (section.content or '')[:200] + "...",
+                            'od_count': od_count,
+                            'cd_count': cd_count,
+                            'total_sentences': len(sentences)
+                        }
+                        
+                        paper_summary['sections'].append(section_summary)
+                        
+                    except Exception as e:
+                        logger.warning(f"處理章節 {section.section_type} 時出錯: {e}")
+                        continue
                 
-                available_papers.append(paper_summary)
+                if paper_summary['sections']:  # 只有當有章節資料時才加入
+                    available_papers.append(paper_summary)
+                    logger.info(f"論文 {paper['filename']} 摘要生成成功，包含 {len(paper_summary['sections'])} 個章節")
+                else:
+                    logger.warning(f"論文 {paper['filename']} 沒有有效的章節資料")
                 
             except Exception as e:
-                logger.warning(f"處理論文 {paper['filename']} 摘要時出錯: {e}")
+                logger.error(f"處理論文 {paper['filename']} 摘要時出錯: {e}", exc_info=True)
                 continue
         
         logger.info(f"生成了 {len(available_papers)} 篇論文的section摘要")
@@ -200,9 +222,12 @@ class UnifiedQueryProcessor:
                 if section['od_count'] > 0 or section['cd_count'] > 0:
                     selected_sections.append({
                         'file_name': paper['file_name'],
+                        'paper_name': paper['file_name'],
+                        'section_id': section['section_id'],
                         'section_type': section['section_type'],
                         'page_num': section['page_num'],
-                        'relevance_score': section['od_count'] + section['cd_count']
+                        'relevance_score': section['od_count'] + section['cd_count'],
+                        'focus_type': 'definitions'
                     })
         
         # 按相關性排序並取前5個
@@ -380,6 +405,7 @@ class UnifiedQueryProcessor:
         """統一內容分析"""
         try:
             analysis_focus = section_selection.get('analysis_focus', 'definitions')
+            logger.info(f"調用 N8N 統一內容分析，分析重點: {analysis_focus}")
             
             # 呼叫N8N統一內容分析API
             analysis_result = await n8n_service.unified_content_analysis(
@@ -388,13 +414,16 @@ class UnifiedQueryProcessor:
                 analysis_focus=analysis_focus
             )
             
-            logger.info("統一內容分析完成")
+            logger.info(f"N8N統一內容分析完成，結果: {analysis_result}")
             return analysis_result
             
         except Exception as e:
             logger.error(f"統一內容分析失敗: {e}")
+            logger.info("使用降級處理...")
             # 降級處理
-            return self._fallback_content_analysis(query, selected_content)
+            fallback_result = self._fallback_content_analysis(query, selected_content)
+            logger.info(f"降級處理結果: {fallback_result}")
+            return fallback_result
     
     def _fallback_content_analysis(
         self, 
