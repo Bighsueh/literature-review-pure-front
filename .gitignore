@@ -109,3 +109,10 @@ docs/modified_*.pdf
 docs/new_*.txt
 .env.backup
 docs/system_architecture.md
+
+# Thesis specific files
+DEPLOYMENT.md
+backend/database/fix_missing_columns.sql
+docker_init_db.py
+fix_database.sql
+force_init_database.py
