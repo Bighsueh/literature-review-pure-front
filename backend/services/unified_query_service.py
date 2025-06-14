@@ -44,7 +44,7 @@ class UnifiedQueryProcessor:
         """
         start_time = datetime.now()
         self.processing_stats['total_queries'] += 1
-        
+
         try:
             logger.info(f"開始處理查詢: {query[:50]}...")
             
@@ -71,8 +71,9 @@ class UnifiedQueryProcessor:
             
             # 步驟2: 提取選中的內容
             selected_sections = section_selection.get('selected_sections', [])
+            analysis_focus = section_selection.get('analysis_focus', 'definitions')
             selected_content = await self._extract_content(
-                query, selected_sections
+                query, selected_sections, analysis_focus
             )
             
             # 步驟3: 統一內容分析
@@ -132,17 +133,19 @@ class UnifiedQueryProcessor:
         
         for paper in papers_data:
             try:
-                logger.info(f"處理論文摘要: {paper['filename']}")
+                logger.info(f"處理論文摘要: {paper['filename']} (original: {paper.get('original_filename', 'N/A')})")
                 
                 # 獲取論文的章節資訊 - 使用正確的方法
                 sections = await db_service.get_sections_for_paper(session, paper['id'])
+                logger.info(f"論文 {paper['filename']} 找到 {len(sections) if sections else 0} 個章節")
                 
                 if not sections:
                     logger.warning(f"論文 {paper['filename']} 沒有章節資料")
                     continue
                 
+                # 使用 original_filename 作為 file_name，確保與 N8N API 一致
                 paper_summary = {
-                    'file_name': paper['filename'],
+                    'file_name': paper.get('original_filename', paper['filename']),
                     'paper_id': paper['id'],
                     'title': paper.get('title', ''),
                     'sections': []
@@ -222,9 +225,10 @@ class UnifiedQueryProcessor:
     async def _extract_content(
         self, 
         query: str,
-        selected_sections: List[Dict[str, Any]]
+        selected_sections: List[Dict[str, Any]],
+        analysis_focus: str = "definitions"
     ) -> List[Dict[str, Any]]:
-        """基於 focus_type 的內容提取邏輯"""
+        """基於 analysis_focus 和 focus_type 的內容提取邏輯"""
         
         if not selected_sections:
             logger.warning("沒有選中的章節")
@@ -241,13 +245,24 @@ class UnifiedQueryProcessor:
                 logger.warning(f"章節資料不完整: paper_name={paper_name}, section_type={section_type}")
                 continue
             
-            if focus_type == 'definitions':
+            logger.info(f"處理章節: {paper_name} - {section_type}, focus_type: {focus_type}, analysis_focus: {analysis_focus}")
+            
+            # 根據 analysis_focus 決定處理方式，而不是僅依賴 focus_type
+            if analysis_focus == 'definitions' or focus_type == 'definitions':
+                # 對於定義查詢，即使 focus_type 不是 definitions 也要進行定義處理
+                logger.info(f"使用定義處理邏輯 (analysis_focus={analysis_focus}, focus_type={focus_type})")
+                content = await self._process_definitions_content(query, paper_name, section_type)
+                if content:
+                    extracted_content.append(content)
+            elif focus_type == 'key_sentences' and analysis_focus == 'definitions':
+                # 特殊情況：focus_type 是 key_sentences 但 analysis_focus 是 definitions
+                logger.info(f"特殊處理: focus_type=key_sentences 但 analysis_focus=definitions，使用定義處理邏輯")
                 content = await self._process_definitions_content(query, paper_name, section_type)
                 if content:
                     extracted_content.append(content)
             else:
                 # 其他 focus_type 的處理框架
-                logger.info(f"暫不支援 focus_type: {focus_type}，使用預設處理")
+                logger.info(f"使用預設處理邏輯: focus_type={focus_type}, analysis_focus={analysis_focus}")
                 content = await self._process_default_content(query, paper_name, section_type)
                 if content:
                     extracted_content.append(content)
@@ -264,8 +279,36 @@ class UnifiedQueryProcessor:
         """處理 definitions 類型的內容（修正版本：不依賴 section_id）"""
         try:
             # 步驟1: 關鍵詞提取
-            keywords = await n8n_service.extract_keywords(query)
-            logger.info(f"提取到關鍵詞: {keywords}")
+            keywords_result = await n8n_service.extract_keywords(query)
+            logger.info(f"關鍵詞提取結果類型: {type(keywords_result)}")
+            logger.info(f"關鍵詞提取原始結果: {keywords_result}")
+            
+            # 處理 N8N API 回傳格式 - 實際格式是 [{"keywords": [...]}]
+            keywords = []
+            if isinstance(keywords_result, list) and len(keywords_result) > 0:
+                first_item = keywords_result[0]
+                if isinstance(first_item, dict) and 'keywords' in first_item:
+                    keywords = first_item['keywords']
+                    logger.info(f"成功提取關鍵詞: {keywords}")
+                else:
+                    logger.warning(f"關鍵詞提取回傳格式異常，第一個項目: {first_item}")
+            elif isinstance(keywords_result, dict):
+                # 備用處理：如果是字典格式
+                if 'keywords' in keywords_result:
+                    keywords = keywords_result['keywords']
+                elif 'error' in keywords_result:
+                    logger.warning(f"關鍵詞提取失敗: {keywords_result['error']}")
+                else:
+                    logger.warning(f"關鍵詞提取回傳格式異常: {keywords_result}")
+            else:
+                logger.warning(f"關鍵詞提取回傳格式完全異常: {keywords_result}")
+            
+            # 如果沒有關鍵詞，使用查詢本身作為關鍵詞
+            if not keywords:
+                logger.info("沒有提取到關鍵詞，使用原始查詢進行匹配")
+                keywords = [query.strip()]
+            
+            logger.info(f"最終使用的關鍵詞: {keywords} (數量: {len(keywords)})")
             
             # 步驟2: 從資料庫根據 paper_name 和 section_type 取得該章節的所有句子
             async for db in get_db():
@@ -274,8 +317,32 @@ class UnifiedQueryProcessor:
                         db, paper_name, section_type
                     )
                     
+                    logger.info(f"資料庫查詢結果: 論文 {paper_name} 章節 {section_type} 取得 {len(all_sentences) if all_sentences else 0} 個句子")
+                    
                     if not all_sentences:
                         logger.warning(f"論文 {paper_name} 的章節 {section_type} 沒有找到句子")
+                        logger.info(f"嘗試查詢該論文的所有章節類型...")
+                        
+                        # 診斷：查看該論文有哪些章節類型
+                        try:
+                            from sqlalchemy import text
+                            debug_query = text("""
+                                SELECT DISTINCT ps.section_type, COUNT(s.id) as sentence_count
+                                FROM paper_sections ps 
+                                LEFT JOIN sentences s ON ps.id = s.section_id 
+                                JOIN papers p ON ps.paper_id = p.id
+                                WHERE p.file_name = :paper_name OR p.original_filename = :paper_name
+                                GROUP BY ps.section_type
+                                ORDER BY sentence_count DESC
+                            """)
+                            debug_result = await db.execute(debug_query, {"paper_name": paper_name})
+                            available_sections = debug_result.fetchall()
+                            
+                            logger.info(f"該論文可用的章節類型: {[(row[0], row[1]) for row in available_sections]}")
+                            
+                        except Exception as debug_e:
+                            logger.warning(f"診斷查詢失敗: {debug_e}")
+                        
                         return None
                     
                     logger.info(f"論文 {paper_name} 章節 {section_type} 取得 {len(all_sentences)} 個句子")
@@ -284,9 +351,28 @@ class UnifiedQueryProcessor:
                     matched_sentences = self._find_matching_sentences(all_sentences, keywords)
                     logger.info(f"關鍵詞匹配找到 {len(matched_sentences)} 個句子")
                     
+                    # 診斷：顯示匹配的句子樣本
+                    if matched_sentences:
+                        sample_sentences = matched_sentences[:3]  # 顯示前3個
+                        for i, sentence in enumerate(sample_sentences):
+                            logger.info(f"匹配句子 {i+1}: {sentence.get('text', '')[:100]}...")
+                    
                     # 步驟4: 篩選定義句子 (OD/CD)
                     definition_sentences = self._filter_definition_sentences(matched_sentences)
                     logger.info(f"篩選出 {len(definition_sentences)} 個定義句子")
+                    
+                    # 診斷：顯示定義句子的類型分布
+                    if definition_sentences:
+                        od_count = len([s for s in definition_sentences if s.get('defining_type') == 'OD'])
+                        cd_count = len([s for s in definition_sentences if s.get('defining_type') == 'CD'])
+                        logger.info(f"定義句子分布: OD={od_count}, CD={cd_count}")
+                    else:
+                        # 診斷：查看所有句子的 defining_type 分布
+                        all_types = {}
+                        for sentence in all_sentences:
+                            dtype = sentence.get('defining_type', 'UNKNOWN')
+                            all_types[dtype] = all_types.get(dtype, 0) + 1
+                        logger.info(f"該章節所有句子的 defining_type 分布: {all_types}")
                     
                     if not definition_sentences:
                         logger.warning(f"論文 {paper_name} 章節 {section_type} 沒有找到符合的定義句子")
@@ -311,13 +397,11 @@ class UnifiedQueryProcessor:
                     }
                     
                 except Exception as e:
-                    logger.error(f"資料庫操作失敗: {e}")
+                    logger.error(f"資料庫操作失敗: {e}", exc_info=True)
                     return None
-                finally:
-                    break  # 退出 async generator
                     
         except Exception as e:
-            logger.error(f"處理 definitions 內容失敗: {e}")
+            logger.error(f"處理 definitions 內容失敗: {e}", exc_info=True)
             return None
     
     async def _process_default_content(

@@ -32,10 +32,10 @@ const RightPanel: React.FC<RightPanelProps> = ({ onResize }) => {
   return (
     <div id="strategy-panel" className="flex flex-col h-full relative bg-gray-50">
       <div className="p-4 border-b bg-white">
-        <h2 className="text-lg font-medium text-gray-900">AI 策略 & 引用詳情</h2>
+        <h2 className="text-lg font-medium text-gray-900">引用詳情</h2>
         <p className="text-sm text-gray-600 mt-1">
           {selectedMessage 
-            ? '顯示所選回答的分析策略和引用詳情' 
+            ? '顯示所選回答的引用詳情' 
             : '點擊系統回答以查看詳情'
           }
         </p>

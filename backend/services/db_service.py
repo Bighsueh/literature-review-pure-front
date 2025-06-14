@@ -530,14 +530,16 @@ class DatabaseService:
                 logger.warning(f"找不到論文: {paper_name}")
                 return []
             
-            # 然後找到對應的章節和句子
+            # 改為不區分大小寫比對 section_type
+            from sqlalchemy import func
+
             query = (
                 select(Sentence, PaperSection)
                 .join(PaperSection, Sentence.section_id == PaperSection.id)
                 .where(
                     and_(
                         Sentence.paper_id == paper.id,
-                        PaperSection.section_type == section_type
+                        func.lower(PaperSection.section_type) == section_type.lower()
                     )
                 )
                 .order_by(Sentence.sentence_order)
