@@ -174,23 +174,97 @@ async def init_database():
             await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'))
             logger.info("✅ UUID擴展已啟用")
         
-        # 3. 執行主要schema
-        schema_path = os.path.join(os.path.dirname(__file__), "../database/schema.sql")
-        if os.path.exists(schema_path):
-            logger.info("📋 執行主要資料庫schema...")
-            await execute_sql_file(schema_path)
-        else:
-            logger.warning(f"⚠️ 找不到schema檔案: {schema_path}")
+        # 3. 使用Alembic Migration初始化資料庫
+        logger.info("📋 執行Alembic遷移...")
         
-        # 4. 執行升級腳本
-        upgrade_path = os.path.join(os.path.dirname(__file__), "../database/upgrade_sentences_table.sql")
-        if os.path.exists(upgrade_path):
-            logger.info("⬆️ 執行資料庫升級腳本...")
-            await execute_sql_file(upgrade_path)
-        else:
-            logger.warning(f"⚠️ 找不到升級腳本: {upgrade_path}")
+        try:
+            # 使用Alembic配置執行遷移
+            from alembic.config import Config
+            from alembic import command
+            import os
+            
+            # 取得migration目錄路徑
+            backend_dir = os.path.dirname(os.path.dirname(__file__))
+            migrations_dir = os.path.join(backend_dir, "migrations")
+            alembic_ini_path = os.path.join(backend_dir, "alembic.ini")
+            
+            logger.info(f"🔍 檢查Alembic設定檔案...")
+            logger.info(f"  - backend_dir: {backend_dir}")
+            logger.info(f"  - migrations_dir: {migrations_dir}")
+            logger.info(f"  - alembic_ini_path: {alembic_ini_path}")
+            
+            if not os.path.exists(alembic_ini_path):
+                logger.error(f"找不到alembic.ini檔案: {alembic_ini_path}")
+                raise FileNotFoundError(f"找不到alembic.ini檔案: {alembic_ini_path}")
+            
+            if not os.path.exists(migrations_dir):
+                logger.error(f"找不到migrations目錄: {migrations_dir}")
+                raise FileNotFoundError(f"找不到migrations目錄: {migrations_dir}")
+            
+            # 建立Alembic配置
+            logger.info("🔧 建立Alembic配置...")
+            alembic_cfg = Config(alembic_ini_path)
+            
+            # 從環境變數取得資料庫URL
+            host = os.getenv("POSTGRES_HOST", "localhost")
+            port = os.getenv("POSTGRES_PORT", "5432")
+            database = os.getenv("POSTGRES_DB", "paper_analysis")
+            username = os.getenv("POSTGRES_USER", "postgres")
+            password = os.getenv("POSTGRES_PASSWORD", "password")
+            database_url = f"postgresql://{username}:{password}@{host}:{port}/{database}"
+            
+            logger.info(f"📝 設定資料庫URL: {database_url}")
+            alembic_cfg.set_main_option("sqlalchemy.url", database_url)
+            
+            # 設定正確的script_location路徑
+            logger.info(f"📝 設定migrations路徑: {migrations_dir}")
+            alembic_cfg.set_main_option("script_location", migrations_dir)
+            
+            # 檢查migration狀態
+            logger.info("🔍 檢查migration狀態...")
+            from alembic.migration import MigrationContext
+            from sqlalchemy import create_engine
+            
+            # 建立同步引擎用於Alembic
+            sync_engine = create_engine(database_url)
+            
+            with sync_engine.connect() as connection:
+                logger.info("✅ 資料庫連線成功，建立migration context...")
+                context = MigrationContext.configure(connection)
+                
+                # 檢查是否已有migration記錄
+                current_rev = context.get_current_revision()
+                logger.info(f"📊 目前migration版本: {current_rev}")
+                
+                if current_rev is None:
+                    logger.info("🚀 初始化Alembic版本控制...")
+                    # 標記為已執行最新migration
+                    command.stamp(alembic_cfg, "head")
+                    logger.info("✅ Alembic版本控制初始化完成")
+                else:
+                    logger.info(f"📋 發現現有migration版本: {current_rev}")
+                    
+                # 執行migration到最新版本
+                logger.info("⬆️ 執行migration到最新版本...")
+                command.upgrade(alembic_cfg, "head")
+                logger.info("✅ Migration執行完成")
+            
+            # 同步引擎用完即關閉
+            sync_engine.dispose()
+                    
+        except Exception as migration_error:
+            logger.error(f"❌ Alembic遷移失敗: {migration_error}")
+            logger.error(f"❌ 錯誤類型: {type(migration_error).__name__}")
+            logger.error(f"❌ 錯誤詳情: {str(migration_error)}")
+            import traceback
+            logger.error(f"❌ 完整堆疊追蹤:")
+            logger.error(traceback.format_exc())
+            logger.info("🔄 回退到schema.sql方式...")
+            
+            # 如果migration失敗，回退到原來的schema.sql方式
+            await _fallback_to_schema_sql()
         
-        # 5. 驗證核心表格是否存在
+        # 4. 驗證核心表格是否存在
         async with async_engine.begin() as conn:
             tables_to_check = ['papers', 'paper_sections', 'sentences', 'paper_selections', 'processing_queue']
             all_tables_exist = True
@@ -210,7 +284,7 @@ async def init_database():
                     logger.error(f"❌ 表格 {table} 不存在")
                     all_tables_exist = False
         
-        # 6. 檢查表格結構
+        # 5. 檢查表格結構
         structure_ok = await check_table_structure()
         
         if all_tables_exist and structure_ok:
@@ -221,6 +295,24 @@ async def init_database():
     except Exception as e:
         logger.error(f"❌ 資料庫初始化失敗: {e}")
         raise
+
+async def _fallback_to_schema_sql():
+    """回退到schema.sql方式建立表格"""
+    # 3. 執行主要schema
+    schema_path = os.path.join(os.path.dirname(__file__), "../database/schema.sql")
+    if os.path.exists(schema_path):
+        logger.info("📋 執行主要資料庫schema...")
+        await execute_sql_file(schema_path)
+    else:
+        logger.warning(f"⚠️ 找不到schema檔案: {schema_path}")
+    
+    # 4. 執行升級腳本
+    upgrade_path = os.path.join(os.path.dirname(__file__), "../database/upgrade_sentences_table.sql")
+    if os.path.exists(upgrade_path):
+        logger.info("⬆️ 執行資料庫升級腳本...")
+        await execute_sql_file(upgrade_path)
+    else:
+        logger.warning(f"⚠️ 找不到升級腳本: {upgrade_path}")
 
 async def close_database():
     """關閉資料庫連線"""

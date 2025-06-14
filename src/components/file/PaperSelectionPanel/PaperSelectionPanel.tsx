@@ -251,9 +251,45 @@ const PaperSelectionPanel: React.FC<PaperSelectionPanelProps> = ({ className = '
   const isPartialSelected = selectedCount > 0 && selectedCount < totalCount;
 
   useEffect(() => {
-    refreshPapers();
-    const interval = setInterval(refreshPapers, 5000); // 每5秒刷新一次
-    return () => clearInterval(interval);
+    let retryCount = 0;
+    let currentInterval = 5000; // 初始間隔5秒
+    const maxRetries = 3;
+    const maxInterval = 30000; // 最大間隔30秒
+    let intervalId: NodeJS.Timeout;
+    
+    const performRefresh = async () => {
+      try {
+        await refreshPapers();
+        // 成功時重置重試計數和間隔
+        retryCount = 0;
+        currentInterval = 5000;
+      } catch (error) {
+        retryCount++;
+        console.warn(`Paper refresh failed (attempt ${retryCount}/${maxRetries}):`, error);
+        
+        // 實施指數退避
+        if (retryCount < maxRetries) {
+          currentInterval = Math.min(currentInterval * 2, maxInterval);
+        } else {
+          // 達到最大重試次數，停止自動刷新
+          console.error('Max refresh retries exceeded, stopping automatic refresh');
+          clearInterval(intervalId);
+          return;
+        }
+      }
+      
+      // 設置下次刷新時間
+      intervalId = setTimeout(performRefresh, currentInterval);
+    };
+    
+    // 立即執行第一次刷新
+    performRefresh();
+    
+    return () => {
+      if (intervalId) {
+        clearTimeout(intervalId);
+      }
+    };
   }, [refreshPapers]);
 
   // 事件處理函數

@@ -8,6 +8,7 @@ import {
   ChevronDownIcon,
   ChevronUpIcon
 } from '@heroicons/react/24/outline';
+import { useAppStore } from '../../../stores/appStore';
 import SourceSummary from '../SourceSummary/SourceSummary';
 
 interface MessageBubbleProps {
@@ -21,6 +22,17 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 }) => {
   const [showReferences, setShowReferences] = useState(false);
   const [showSourceSummary, setShowSourceSummary] = useState(false);
+  const { setSelectedMessage, selectedMessage } = useAppStore();
+
+  // 處理系統回答點擊事件
+  const handleMessageClick = () => {
+    if (message.type === 'system') {
+      setSelectedMessage(message);
+    }
+  };
+
+  // 檢查是否為當前選中的訊息
+  const isSelected = selectedMessage?.id === message.id;
 
   const formatTimestamp = (date: Date) => {
     return new Date(date).toLocaleTimeString('zh-TW', {
@@ -70,7 +82,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           <span key={`ref-${refId}`} className="relative inline-block group">
             <button
               className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 mx-0.5 hover:bg-blue-200 transition-colors"
-              onClick={() => onReferenceClick?.(refId)}
+              onClick={(e) => {
+                e.stopPropagation(); // 防止觸發父層點擊事件
+                onReferenceClick?.(refId);
+              }}
             >
               <DocumentTextIcon className="h-3 w-3 mr-1" />
               引用 #{refId.substring(0, 6)}
@@ -118,7 +133,26 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           </div>
         </div>
         
-        <div className={`rounded-lg px-4 py-3 shadow-sm ${message.type === 'user' ? 'bg-blue-500 text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none border border-gray-200'}`}>
+        <div 
+          className={`rounded-lg px-4 py-3 shadow-sm transition-all duration-200 ${
+            message.type === 'user' 
+              ? 'bg-blue-500 text-white rounded-tr-none' 
+              : `bg-gray-50 text-gray-800 rounded-tl-none border-2 ${
+                  isSelected 
+                    ? 'border-blue-500 shadow-lg' 
+                    : 'border-gray-200 hover:border-blue-300'
+                } ${message.type === 'system' ? 'cursor-pointer' : ''}`
+          }`}
+          onClick={handleMessageClick}
+        >
+          {/* 選中狀態提示 */}
+          {isSelected && message.type === 'system' && (
+            <div className="mb-2 flex items-center text-xs text-blue-600">
+              <InformationCircleIcon className="h-3 w-3 mr-1" />
+              <span>已選中此回答 - 查看右側面板了解AI策略</span>
+            </div>
+          )}
+
           {/* 主要內容 */}
           {renderContentWithReferences()}
           
@@ -156,7 +190,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           {message.references && message.references.length > 0 && (
             <div className="mt-2">
               <button
-                onClick={() => setShowReferences(!showReferences)}
+                onClick={(e) => {
+                  e.stopPropagation(); // 防止觸發父層點擊事件
+                  setShowReferences(!showReferences);
+                }}
                 className={`text-xs flex items-center ${message.type === 'user' ? 'text-blue-200 hover:text-blue-100' : 'text-blue-600 hover:text-blue-800'}`}
               >
                 <DocumentTextIcon className="h-3 w-3 mr-1" />
@@ -175,7 +212,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                     <div 
                       key={ref.id}
                       className={`text-xs p-2 rounded border cursor-pointer ${message.type === 'user' ? 'bg-blue-400 border-blue-300 hover:bg-blue-300' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'}`}
-                      onClick={() => onReferenceClick?.(ref.id)}
+                      onClick={(e) => {
+                        e.stopPropagation(); // 防止觸發父層點擊事件
+                        onReferenceClick?.(ref.id);
+                      }}
                     >
                       <div className="font-medium">
                         {ref.paper_name || ref.file_name || `引用 ${index + 1}`}
@@ -200,7 +240,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           {message.source_summary && message.type === 'system' && (
             <div className="mt-3">
               <button
-                onClick={() => setShowSourceSummary(!showSourceSummary)}
+                onClick={(e) => {
+                  e.stopPropagation(); // 防止觸發父層點擊事件
+                  setShowSourceSummary(!showSourceSummary);
+                }}
                 className="text-xs flex items-center text-blue-600 hover:text-blue-800"
               >
                 <InformationCircleIcon className="h-3 w-3 mr-1" />
@@ -224,6 +267,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           {message.metadata?.processingTime && (
             <div className={`text-xs mt-1 ${message.type === 'user' ? 'text-blue-200' : 'text-gray-500'}`}>
               處理時間: {message.metadata.processingTime}ms
+            </div>
+          )}
+
+          {/* 系統回答點擊提示 */}
+          {message.type === 'system' && !isSelected && (
+            <div className="mt-2 text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">
+              💡 點擊此回答查看AI策略詳情
             </div>
           )}
         </div>

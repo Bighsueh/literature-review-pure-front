@@ -479,24 +479,6 @@ class DatabaseService:
             
             logger.info(f"查詢到 {len(papers)} 篇已選取的論文")
             
-            # 添加詳細的狀態檢查
-            completed_papers = []
-            for paper in papers:
-                logger.debug(f"檢查論文: {paper.original_filename or paper.file_name}")
-                logger.debug(f"  - ID: {paper.id}")
-                logger.debug(f"  - 處理狀態: {paper.processing_status}")
-                logger.debug(f"  - Grobid處理: {paper.grobid_processed}")
-                logger.debug(f"  - 句子處理: {paper.sentences_processed}")
-                logger.debug(f"  - OD/CD處理: {paper.od_cd_processed}")
-                
-                # 確保只返回處理完成的論文
-                if paper.processing_status == 'completed':
-                    completed_papers.append(paper)
-                else:
-                    logger.warning(f"論文 {paper.original_filename or paper.file_name} 狀態為 {paper.processing_status}，跳過")
-            
-            logger.info(f"返回 {len(completed_papers)} 篇已完成處理的論文")
-            
             # 手動建立 PaperResponse，確保 UUID 正確轉換為字串
             return [
                 PaperResponse(
@@ -515,12 +497,73 @@ class DatabaseService:
                     created_at=paper.created_at,
                     is_selected=True
                 )
-                for paper in completed_papers
+                for paper in papers
             ]
-            
+             
         except Exception as e:
             logger.error(f"取得已選取論文失敗: {e}", exc_info=True)
             # 返回空列表而不是拋出異常，確保系統穩定性
+            return []
+    
+    async def get_sentences_by_paper_and_section_type(
+        self, 
+        db: AsyncSession, 
+        paper_name: str, 
+        section_type: str
+    ) -> List[Dict[str, Any]]:
+        """根據論文名稱和章節類型獲取句子（新增方法，避免依賴section_id）"""
+        try:
+            # 首先找到對應的論文
+            paper_query = (
+                select(Paper)
+                .where(
+                    or_(
+                        Paper.file_name == paper_name,
+                        Paper.original_filename == paper_name
+                    )
+                )
+            )
+            paper_result = await db.execute(paper_query)
+            paper = paper_result.scalar_one_or_none()
+            
+            if not paper:
+                logger.warning(f"找不到論文: {paper_name}")
+                return []
+            
+            # 改為不區分大小寫比對 section_type
+            from sqlalchemy import func
+
+            query = (
+                select(Sentence, PaperSection)
+                .join(PaperSection, Sentence.section_id == PaperSection.id)
+                .where(
+                    and_(
+                        Sentence.paper_id == paper.id,
+                        func.lower(PaperSection.section_type) == section_type.lower()
+                    )
+                )
+                .order_by(Sentence.sentence_order)
+            )
+            result = await db.execute(query)
+            sentence_section_pairs = result.all()
+            
+            sentences = []
+            for sentence, section in sentence_section_pairs:
+                sentences.append({
+                    "text": sentence.sentence_text,
+                    "page_num": sentence.page_num,
+                    "defining_type": sentence.defining_type,
+                    "sentence_order": sentence.sentence_order,
+                    "id": str(sentence.id),
+                    "section_id": str(sentence.section_id),
+                    "analysis_reason": sentence.analysis_reason
+                })
+            
+            logger.info(f"找到 {len(sentences)} 個句子 for paper: {paper_name}, section: {section_type}")
+            return sentences
+            
+        except Exception as e:
+            logger.error(f"根據論文名稱和章節類型查詢句子失敗: {e}")
             return []
     
     async def set_paper_selection(self, db: AsyncSession, paper_id: str, is_selected: bool) -> bool:

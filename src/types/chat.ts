@@ -21,6 +21,25 @@ export interface SourceSummary {
   analysis_type?: string;
 }
 
+// 新增選中章節資訊類型
+export interface SelectedSection {
+  paper_name: string;
+  section_type: string;
+  focus_type: string;        // key_sentences, deep_summary, cross_table, definitions
+  keywords: string[];
+  selection_reason: string;
+  page_num?: number;
+  section_id?: string;
+}
+
+// 新增策略資訊類型
+export interface StrategyInfo {
+  analysis_focus: string;          // locate_info, understand_content, cross_paper, etc.
+  suggested_approach: string;      // 建議的分析方式描述
+  selected_sections: SelectedSection[];
+  fallback_mode?: boolean;         // 是否為降級模式
+}
+
 export interface Message {
   id: string;
   type: 'user' | 'system';
@@ -28,6 +47,7 @@ export interface Message {
   timestamp: Date;
   references?: Reference[];          // 更新為新的引用格式
   source_summary?: SourceSummary;    // 新增來源摘要
+  strategy_info?: StrategyInfo;      // 新增策略資訊
   metadata?: MessageMetadata;
 }
 

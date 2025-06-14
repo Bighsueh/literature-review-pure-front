@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { ProcessingStage } from '../types/api';
 import { ProcessedSentence } from '../types/file';
+import { Message } from '../types/chat';
 import { paperMonitorService } from '../services/paper_monitor_service';
 import { apiService } from '../services/api_service';
 
@@ -40,11 +41,17 @@ interface AppState {
   // 引用句子
   selectedReferences: ProcessedSentence[];
   
+  // NEW: 選中的訊息 (用於策略顯示)
+  selectedMessage: Message | null;
+  
   // 動作
   setUI: (updates: Partial<AppState['ui']>) => void;
   setProgress: (updates: Partial<AppState['progress']>) => void;
   resetProgress: () => void;
   setSelectedReferences: (references: ProcessedSentence[]) => void;
+  
+  // NEW: 選中訊息管理
+  setSelectedMessage: (message: Message | null) => void;
   
   // NEW: 活動任務管理動作
   addActiveTask: (task: ActiveTask) => void;
@@ -80,6 +87,7 @@ export const useAppStore = create<AppState>()(
         isUploading: false,
         
         selectedReferences: [],
+        selectedMessage: null,
         
         setUI: (updates) => set((state) => ({
           ui: { ...state.ui, ...updates }
@@ -101,6 +109,10 @@ export const useAppStore = create<AppState>()(
 
         setSelectedReferences: (references) => set({
           selectedReferences: references
+        }),
+
+        setSelectedMessage: (message) => set({
+          selectedMessage: message
         }),
 
         // NEW: 活動任務管理
@@ -185,7 +197,8 @@ export const useAppStore = create<AppState>()(
         partialize: (state) => ({
           ui: state.ui,
           progress: state.progress,
-          selectedReferences: state.selectedReferences
+          selectedReferences: state.selectedReferences,
+          selectedMessage: state.selectedMessage
         })
       }
     )

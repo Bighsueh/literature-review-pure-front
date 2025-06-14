@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database.connection import db_manager
-from ..database.migration_manager import migration_manager
+from ..core.migration_manager import migration_manager
 from ..core.logging import get_logger
 from ..core.config import get_settings
 
@@ -66,19 +66,52 @@ async def detailed_health_check():
             "message": "資料庫連接失敗"
         }
     
-    # 2. 遷移狀態檢查
+    # 2. Schema Drift 檢查
     try:
-        migration_status = await migration_manager.get_migration_status()
+        has_drift, drift_report = await migration_manager.detect_schema_drift()
+        
+        if has_drift:
+            health_data["checks"]["schema"] = {
+                "status": "warning" if not drift_report.get('critical_issues') else "unhealthy",
+                "has_drift": True,
+                "critical_issues": drift_report.get('critical_issues', []),
+                "warnings": drift_report.get('warnings', []),
+                "missing_tables": drift_report.get('missing_tables', []),
+                "missing_columns": drift_report.get('missing_columns', {}),
+                "message": f"檢測到 schema drift: {len(drift_report.get('critical_issues', []))} 個關鍵問題, {len(drift_report.get('warnings', []))} 個警告"
+            }
+            
+            if drift_report.get('critical_issues'):
+                overall_healthy = False
+        else:
+            health_data["checks"]["schema"] = {
+                "status": "healthy",
+                "has_drift": False,
+                "message": "資料庫結構正常"
+            }
+            
+    except Exception as e:
+        overall_healthy = False
+        health_data["checks"]["schema"] = {
+            "status": "error",
+            "error": str(e),
+            "message": "Schema drift 檢查失敗"
+        }
+    
+    # 3. 遷移狀態檢查
+    try:
+        current_rev = migration_manager.get_current_revision()
+        head_rev = migration_manager.get_head_revision()
         
         health_data["checks"]["migrations"] = {
-            "status": "healthy" if migration_status["status"] == "up_to_date" else "warning",
-            "current_version": migration_status["current_version"],
-            "pending_count": migration_status["pending_count"],
-            "total_migrations": migration_status["total_migrations"],
-            "message": "遷移狀態正常" if migration_status["status"] == "up_to_date" else f"有 {migration_status['pending_count']} 個待應用的遷移"
+            "status": "healthy" if current_rev == head_rev else "warning",
+            "current_revision": current_rev,
+            "head_revision": head_rev,
+            "up_to_date": current_rev == head_rev,
+            "message": "遷移狀態正常" if current_rev == head_rev else "有待應用的遷移"
         }
         
-        if migration_status["status"] != "up_to_date":
+        if current_rev != head_rev:
             overall_healthy = False
             
     except Exception as e:
@@ -89,7 +122,7 @@ async def detailed_health_check():
             "message": "遷移狀態檢查失敗"
         }
     
-    # 3. 系統資源檢查
+    # 4. 系統資源檢查
     try:
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
@@ -121,7 +154,7 @@ async def detailed_health_check():
             "message": "系統資源檢查失敗"
         }
     
-    # 4. 檔案系統檢查
+    # 5. 檔案系統檢查
     try:
         settings = get_settings()
         temp_dir = settings.temp_files_dir
@@ -210,155 +243,206 @@ async def database_health():
             "database_version": db_version,
             "database_size": db_size,
             "tables": tables,
-            "table_count": len(tables),
-            "connection_pool": pool_status,
+            "pool_status": pool_status,
             "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"資料庫健康檢查失敗: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "status": "unhealthy",
-                "error": str(e),
-                "message": "資料庫連接失敗"
+        logger.error(f"Database health check failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Database health check failed: {str(e)}")
+
+@router.get("/schema")
+async def schema_health():
+    """資料庫結構健康檢查和 Schema Drift 檢測"""
+    
+    try:
+        # 執行 schema drift 檢測
+        has_drift, drift_report = await migration_manager.detect_schema_drift()
+        
+        # 獲取實際資料庫結構
+        actual_schema = await migration_manager.get_actual_schema()
+        
+        # 獲取遷移版本資訊
+        current_rev = migration_manager.get_current_revision()
+        head_rev = migration_manager.get_head_revision()
+        
+        return {
+            "status": "unhealthy" if has_drift and drift_report.get('critical_issues') else "healthy",
+            "has_drift": has_drift,
+            "drift_report": drift_report,
+            "actual_schema": actual_schema,
+            "migration_info": {
+                "current_revision": current_rev,
+                "head_revision": head_rev,
+                "up_to_date": current_rev == head_rev
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Schema health check failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Schema health check failed: {str(e)}")
+
+@router.post("/schema/fix")
+async def fix_schema_issues():
+    """自動修復 Schema 問題"""
+    
+    try:
+        # 檢測問題
+        has_drift, drift_report = await migration_manager.detect_schema_drift()
+        
+        if not has_drift:
+            return {
+                "status": "no_action_needed",
+                "message": "未檢測到需要修復的 schema 問題",
+                "timestamp": datetime.utcnow().isoformat()
             }
-        )
+        
+        critical_issues = drift_report.get('critical_issues', [])
+        if not critical_issues:
+            return {
+                "status": "no_critical_issues",
+                "message": "沒有關鍵問題需要修復",
+                "warnings": drift_report.get('warnings', []),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
+        # 嘗試自動修復
+        fix_success = await migration_manager.auto_fix_critical_issues()
+        
+        if fix_success:
+            # 驗證修復結果
+            has_drift_after, drift_report_after = await migration_manager.detect_schema_drift()
+            
+            return {
+                "status": "fixed" if not has_drift_after else "partially_fixed",
+                "message": "關鍵問題已修復" if not has_drift_after else "部分問題已修復",
+                "issues_before": critical_issues,
+                "remaining_issues": drift_report_after.get('critical_issues', []),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            return {
+                "status": "fix_failed",
+                "message": "自動修復失敗，請手動檢查",
+                "issues": critical_issues,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+    except Exception as e:
+        logger.error(f"Schema fix failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Schema fix failed: {str(e)}")
 
 @router.get("/migrations")
 async def migrations_status():
     """遷移狀態檢查"""
     
     try:
-        status = await migration_manager.get_migration_status()
-        pending_migrations = await migration_manager.get_pending_migrations()
+        current_rev = migration_manager.get_current_revision()
+        head_rev = migration_manager.get_head_revision()
+        
+        # 檢查表格和欄位狀態
+        table_status = await migration_manager.check_tables_exist()
+        column_status = await migration_manager.check_columns_exist()
         
         return {
-            "status": status["status"],
-            "summary": status,
-            "pending_migrations": [
-                {
-                    "version": m.version,
-                    "description": m.description,
-                    "filename": m.filename
-                }
-                for m in pending_migrations
-            ],
+            "status": "up_to_date" if current_rev == head_rev else "pending",
+            "current_revision": current_rev,
+            "head_revision": head_rev,
+            "needs_migration": current_rev != head_rev,
+            "table_status": table_status,
+            "column_status": column_status,
             "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"遷移狀態檢查失敗: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "status": "error",
-                "error": str(e),
-                "message": "遷移狀態檢查失敗"
-            }
-        )
+        logger.error(f"Migration status check failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Migration status check failed: {str(e)}")
 
 @router.post("/migrations/apply")
 async def apply_pending_migrations():
-    """手動應用待處理的遷移"""
+    """應用待執行的遷移"""
     
     try:
-        result = await migration_manager.migrate()
+        current_rev = migration_manager.get_current_revision()
+        head_rev = migration_manager.get_head_revision()
         
-        if result["status"] == "failed":
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "status": "failed",
-                    "message": "遷移應用失敗",
-                    "failed_migrations": result["failed_migrations"]
-                }
-            )
-        
-        return {
-            "status": "success",
-            "message": "遷移應用完成",
-            "result": result,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"手動遷移失敗: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "status": "error",
-                "error": str(e),
-                "message": "遷移應用過程中發生錯誤"
+        if current_rev == head_rev:
+            return {
+                "status": "no_action_needed",
+                "message": "沒有待應用的遷移",
+                "current_revision": current_rev,
+                "timestamp": datetime.utcnow().isoformat()
             }
-        )
+        
+        # 執行遷移
+        success = migration_manager.run_migrations()
+        
+        if success:
+            new_current_rev = migration_manager.get_current_revision()
+            return {
+                "status": "success",
+                "message": "遷移應用成功",
+                "previous_revision": current_rev,
+                "current_revision": new_current_rev,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            return {
+                "status": "failed",
+                "message": "遷移應用失敗",
+                "current_revision": current_rev,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+    except Exception as e:
+        logger.error(f"Migration apply failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Migration apply failed: {str(e)}")
 
 @router.get("/system")
 async def system_info():
     """系統資訊"""
     
     try:
-        import platform
-        
         # CPU 資訊
-        cpu_info = {
-            "count": psutil.cpu_count(),
-            "usage_percent": psutil.cpu_percent(interval=1)
-        }
+        cpu_percent = psutil.cpu_percent(interval=1)
+        cpu_count = psutil.cpu_count()
         
         # 記憶體資訊
         memory = psutil.virtual_memory()
-        memory_info = {
-            "total_gb": round(memory.total / (1024**3), 2),
-            "available_gb": round(memory.available / (1024**3), 2),
-            "used_gb": round(memory.used / (1024**3), 2),
-            "percent_used": memory.percent
-        }
         
-        # 磁碟資訊
+        # 硬碟資訊
         disk = psutil.disk_usage('/')
-        disk_info = {
-            "total_gb": round(disk.total / (1024**3), 2),
-            "used_gb": round(disk.used / (1024**3), 2),
-            "free_gb": round(disk.free / (1024**3), 2),
-            "percent_used": round((disk.used / disk.total) * 100, 2)
-        }
         
-        # 網路資訊
-        network = psutil.net_io_counters()
-        network_info = {
-            "bytes_sent": network.bytes_sent,
-            "bytes_recv": network.bytes_recv,
-            "packets_sent": network.packets_sent,
-            "packets_recv": network.packets_recv
-        }
+        # 系統負載
+        load_avg = os.getloadavg() if hasattr(os, 'getloadavg') else None
+        
+        # 啟動時間
+        boot_time = datetime.fromtimestamp(psutil.boot_time())
         
         return {
-            "platform": {
-                "system": platform.system(),
-                "release": platform.release(),
-                "version": platform.version(),
-                "machine": platform.machine(),
-                "processor": platform.processor()
+            "status": "healthy",
+            "cpu": {
+                "percent": cpu_percent,
+                "count": cpu_count,
+                "load_average": load_avg
             },
-            "cpu": cpu_info,
-            "memory": memory_info,
-            "disk": disk_info,
-            "network": network_info,
-            "python_version": platform.python_version(),
+            "memory": {
+                "total_gb": round(memory.total / (1024**3), 2),
+                "available_gb": round(memory.available / (1024**3), 2),
+                "used_gb": round(memory.used / (1024**3), 2),
+                "percent": memory.percent
+            },
+            "disk": {
+                "total_gb": round(disk.total / (1024**3), 2),
+                "used_gb": round(disk.used / (1024**3), 2),
+                "free_gb": round(disk.free / (1024**3), 2),
+                "percent": round((disk.used / disk.total) * 100, 2)
+            },
+            "boot_time": boot_time.isoformat(),
             "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"系統資訊取得失敗: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "status": "error",
-                "error": str(e),
-                "message": "系統資訊取得失敗"
-            }
-        ) 
+        logger.error(f"System info failed: {e}")
+        raise HTTPException(status_code=503, detail=f"System info failed: {str(e)}") 

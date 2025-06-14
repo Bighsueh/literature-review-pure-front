@@ -410,7 +410,7 @@ async def process_unified_query(
         # 生成論文摘要
         papers_summary = await unified_query_processor._generate_papers_summary(papers_data, db)
         
-        # 處理查詢
+        # 處理查詢 - 執行完整的 flowchart
         result = await unified_query_processor.process_query(
             query=request.query,
             papers_summary=papers_summary

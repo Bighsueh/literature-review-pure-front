@@ -1,18 +1,9 @@
 // constants/apiConfig.ts
-
-// Determine the appropriate base URL for the API
-const getSplitSentencesBaseUrl = () => {
-  // When running in production, use relative URL which will be handled by Nginx
-  if (import.meta.env.PROD) {
-    return "";
-  }
-  // For local development
-  return "http://localhost:8000";
-};
+import { getSplitSentencesUrl } from '../config/api.config';
 
 export const API_CONFIG = {
   splitSentences: {
-    baseUrl: getSplitSentencesBaseUrl(), // Dynamically set based on environment
+    baseUrl: getSplitSentencesUrl(), // Dynamically set based on environment
     endpoint: "/api/process-pdf",
     method: "POST",
     contentType: "multipart/form-data"

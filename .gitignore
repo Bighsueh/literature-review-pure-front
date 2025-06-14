@@ -107,3 +107,5 @@ docs/test*.pdf
 docs/test*.txt
 docs/modified_*.pdf
 docs/new_*.txt
+.env.backup
+docs/system_architecture.md
