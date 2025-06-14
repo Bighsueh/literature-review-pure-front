@@ -1,39 +1,38 @@
 -- ================================================
--- 論文分析系統資料庫完整建置 SQL
--- PostgreSQL 15.13
--- 建立日期: 2025-06-14
+-- 完整資料庫重置與重建腳本
+-- 解決 "relation already exists" 錯誤
 -- ================================================
 
--- 1. 清空現有資料庫 (小心使用!)
+-- 第一步：完全清空所有相關物件
 -- ================================================
 
--- 停用所有外鍵約束以避免刪除順序問題
-SET session_replication_role = replica;
+-- 1.1 刪除所有觸發器
+DROP TRIGGER IF EXISTS trigger_update_papers_updated_at ON papers;
+DROP TRIGGER IF EXISTS trigger_update_sentences_updated_at ON sentences;
 
--- 刪除所有現有表格 (如果存在)
+-- 1.2 刪除所有函數
+DROP FUNCTION IF EXISTS update_papers_updated_at() CASCADE;
+DROP FUNCTION IF EXISTS update_sentences_updated_at() CASCADE;
+
+-- 1.3 強制刪除所有表格 (正確順序)
 DROP TABLE IF EXISTS processing_queue CASCADE;
 DROP TABLE IF EXISTS paper_selections CASCADE;
 DROP TABLE IF EXISTS sentences CASCADE;
 DROP TABLE IF EXISTS paper_sections CASCADE;
 DROP TABLE IF EXISTS papers CASCADE;
 
--- 刪除所有函數 (如果存在)
-DROP FUNCTION IF EXISTS update_papers_updated_at() CASCADE;
-DROP FUNCTION IF EXISTS update_sentences_updated_at() CASCADE;
+-- 1.4 確認清理完成
+SELECT 
+    'Tables after cleanup:' as info,
+    count(*) as remaining_tables
+FROM pg_tables 
+WHERE schemaname = 'public' 
+    AND tablename IN ('papers', 'paper_sections', 'sentences', 'paper_selections', 'processing_queue');
 
--- 重新啟用外鍵約束
-SET session_replication_role = DEFAULT;
-
--- 2. 建立必要的擴展
+-- 第二步：重新建立所有表格
 -- ================================================
 
--- 建立 UUID 擴展 (如果不存在)
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- 3. 建立所有表格
--- ================================================
-
--- 3.1 papers (論文主表)
+-- 2.1 papers (論文主表)
 CREATE TABLE papers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     file_name VARCHAR(255) NOT NULL,
@@ -62,7 +61,9 @@ CREATE TABLE papers (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 3.2 paper_sections (論文章節表)
+SELECT 'papers table created' as status;
+
+-- 2.2 paper_sections (論文章節表)
 CREATE TABLE paper_sections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
@@ -75,7 +76,9 @@ CREATE TABLE paper_sections (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 3.3 sentences (句子表)
+SELECT 'paper_sections table created' as status;
+
+-- 2.3 sentences (句子表)
 CREATE TABLE sentences (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
@@ -99,7 +102,9 @@ CREATE TABLE sentences (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 3.4 paper_selections (論文選擇表)
+SELECT 'sentences table created' as status;
+
+-- 2.4 paper_selections (論文選擇表)
 CREATE TABLE paper_selections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
@@ -109,7 +114,9 @@ CREATE TABLE paper_selections (
     UNIQUE(paper_id)
 );
 
--- 3.5 processing_queue (處理佇列表)
+SELECT 'paper_selections table created' as status;
+
+-- 2.5 processing_queue (處理佇列表)
 CREATE TABLE processing_queue (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
@@ -124,19 +131,21 @@ CREATE TABLE processing_queue (
     completed_at TIMESTAMP
 );
 
--- 4. 建立檢查約束
+SELECT 'processing_queue table created' as status;
+
+-- 第三步：建立所有約束
 -- ================================================
 
--- papers 表約束
+-- 3.1 papers 表約束
 ALTER TABLE papers 
 ADD CONSTRAINT chk_papers_processing_status 
-CHECK (processing_status IN ('pending', 'processing', 'completed', 'error'));
+CHECK (processing_status IN ('uploading', 'pending', 'processing', 'completed', 'error'));
 
 ALTER TABLE papers 
 ADD CONSTRAINT chk_papers_file_size 
 CHECK (file_size >= 0);
 
--- sentences 表約束
+-- 3.2 sentences 表約束
 ALTER TABLE sentences 
 ADD CONSTRAINT chk_sentences_detection_status 
 CHECK (detection_status IN ('unknown', 'processing', 'success', 'error'));
@@ -149,7 +158,7 @@ ALTER TABLE sentences
 ADD CONSTRAINT chk_sentences_word_count 
 CHECK (word_count >= 0);
 
--- processing_queue 表約束
+-- 3.3 processing_queue 表約束
 ALTER TABLE processing_queue 
 ADD CONSTRAINT chk_queue_status 
 CHECK (status IN ('pending', 'processing', 'completed', 'failed'));
@@ -158,21 +167,23 @@ ALTER TABLE processing_queue
 ADD CONSTRAINT chk_queue_priority 
 CHECK (priority >= 1 AND priority <= 10);
 
--- 5. 建立索引
+SELECT 'All constraints created' as status;
+
+-- 第四步：建立所有索引
 -- ================================================
 
--- papers 表索引
+-- 4.1 papers 表索引
 CREATE INDEX idx_papers_status ON papers(processing_status);
 CREATE INDEX idx_papers_hash ON papers(file_hash);
 CREATE INDEX idx_papers_created_at ON papers(created_at);
 CREATE INDEX idx_papers_filename ON papers(file_name);
 
--- paper_sections 表索引
+-- 4.2 paper_sections 表索引
 CREATE INDEX idx_sections_paper_id ON paper_sections(paper_id);
 CREATE INDEX idx_sections_type ON paper_sections(section_type);
 CREATE INDEX idx_sections_order ON paper_sections(paper_id, section_order);
 
--- sentences 表索引
+-- 4.3 sentences 表索引
 CREATE INDEX idx_sentences_paper_id ON sentences(paper_id);
 CREATE INDEX idx_sentences_section_id ON sentences(section_id);
 CREATE INDEX idx_sentences_detection_status ON sentences(detection_status);
@@ -182,23 +193,25 @@ CREATE INDEX idx_sentences_has_objective ON sentences(has_objective);
 CREATE INDEX idx_sentences_has_dataset ON sentences(has_dataset);
 CREATE INDEX idx_sentences_has_contribution ON sentences(has_contribution);
 
--- 全文搜索索引
+-- 4.4 全文搜索索引
 CREATE INDEX idx_sentences_text_search ON sentences USING gin(to_tsvector('english', content));
 
--- paper_selections 表索引
+-- 4.5 paper_selections 表索引
 CREATE INDEX idx_selections_paper_id ON paper_selections(paper_id);
 CREATE INDEX idx_selections_is_selected ON paper_selections(is_selected);
 
--- processing_queue 表索引
+-- 4.6 processing_queue 表索引
 CREATE INDEX idx_queue_paper_id ON processing_queue(paper_id);
 CREATE INDEX idx_queue_task_id ON processing_queue(task_id);
 CREATE INDEX idx_queue_status ON processing_queue(status);
 CREATE INDEX idx_queue_priority ON processing_queue(priority, created_at);
 
--- 6. 建立觸發器函數
+SELECT 'All indexes created' as status;
+
+-- 第五步：建立觸發器函數和觸發器
 -- ================================================
 
--- 更新 papers 表的 updated_at 欄位
+-- 5.1 更新 papers 表的 updated_at 欄位
 CREATE OR REPLACE FUNCTION update_papers_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -207,7 +220,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 更新 sentences 表的 updated_at 欄位
+-- 5.2 更新 sentences 表的 updated_at 欄位
 CREATE OR REPLACE FUNCTION update_sentences_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -216,81 +229,53 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 7. 建立觸發器
--- ================================================
-
--- papers 表觸發器
+-- 5.3 建立觸發器
 CREATE TRIGGER trigger_update_papers_updated_at
     BEFORE UPDATE ON papers
     FOR EACH ROW
     EXECUTE FUNCTION update_papers_updated_at();
 
--- sentences 表觸發器
 CREATE TRIGGER trigger_update_sentences_updated_at
     BEFORE UPDATE ON sentences
     FOR EACH ROW
     EXECUTE FUNCTION update_sentences_updated_at();
 
--- 8. 驗證資料庫結構
+SELECT 'All triggers created' as status;
+
+-- 第六步：驗證建置結果
 -- ================================================
 
--- 檢查所有表格是否建立成功
+-- 6.1 檢查所有表格
 SELECT 
+    'Final verification:' as info,
     tablename,
-    schemaname,
-    hasindexes,
-    hasrules,
-    hastriggers
+    schemaname
 FROM pg_tables 
 WHERE schemaname = 'public'
+    AND tablename IN ('papers', 'paper_sections', 'sentences', 'paper_selections', 'processing_queue')
 ORDER BY tablename;
 
--- 檢查所有索引
+-- 6.2 檢查表格數量
 SELECT 
-    schemaname,
-    tablename,
-    indexname,
-    indexdef
-FROM pg_indexes
+    'Total tables created:' as info,
+    count(*) as count
+FROM pg_tables 
 WHERE schemaname = 'public'
-ORDER BY tablename, indexname;
+    AND tablename IN ('papers', 'paper_sections', 'sentences', 'paper_selections', 'processing_queue');
 
--- 檢查所有外鍵約束
-SELECT
-    tc.table_name,
-    tc.constraint_name,
-    tc.constraint_type,
-    kcu.column_name,
-    ccu.table_name AS foreign_table_name,
-    ccu.column_name AS foreign_column_name
-FROM information_schema.table_constraints AS tc 
-    JOIN information_schema.key_column_usage AS kcu
-        ON tc.constraint_name = kcu.constraint_name
-        AND tc.table_schema = kcu.table_schema
-    JOIN information_schema.constraint_column_usage AS ccu
-        ON ccu.constraint_name = tc.constraint_name
-        AND ccu.table_schema = tc.table_schema
-WHERE tc.constraint_type = 'FOREIGN KEY' 
-    AND tc.table_schema = 'public'
-ORDER BY tc.table_name;
+-- 6.3 測試插入一筆資料
+INSERT INTO papers (file_name, original_filename) 
+VALUES ('test.pdf', 'test_original.pdf');
 
--- 檢查所有檢查約束
-SELECT
-    tc.table_name,
-    tc.constraint_name,
-    cc.check_clause
-FROM information_schema.table_constraints AS tc
-    JOIN information_schema.check_constraints AS cc
-        ON tc.constraint_name = cc.constraint_name
-WHERE tc.constraint_type = 'CHECK' 
-    AND tc.table_schema = 'public'
-ORDER BY tc.table_name;
-
--- ================================================
--- 資料庫建置完成!
--- ================================================
-
--- 輸出建置摘要
 SELECT 
-    'Database schema setup completed successfully!' AS status,
-    NOW() AS completed_at;
+    'Test insert successful' as info,
+    id,
+    file_name,
+    created_at
+FROM papers
+WHERE file_name = 'test.pdf';
+
+-- 6.4 清理測試資料
+DELETE FROM papers WHERE file_name = 'test.pdf';
+
+SELECT 'Database setup completed successfully!' as final_status;
