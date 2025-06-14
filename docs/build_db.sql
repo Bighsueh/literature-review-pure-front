@@ -109,7 +109,7 @@ CREATE TABLE paper_selections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
     is_selected BOOLEAN DEFAULT TRUE,
-    selected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    selected_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     UNIQUE(paper_id)
 );
