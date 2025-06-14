@@ -568,7 +568,8 @@ class DatabaseService:
                     "has_objective": sentence.has_objective,
                     "has_dataset": sentence.has_dataset,
                     "has_contribution": sentence.has_contribution,
-                    "explanation": sentence.explanation
+                    "explanation": sentence.explanation,
+                    "page_num": section.page_num  # 添加頁碼資訊
                 })
             
             logger.info(f"找到 {len(sentences)} 個句子 for paper: {paper_name}, section: {section_type}")
