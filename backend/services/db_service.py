@@ -208,15 +208,30 @@ class DatabaseService:
                 raise ValueError("句子資料為空或無效")
 
             # 3. 更新論文狀態
-            await db.execute(
+            update_result = await db.execute(
                 update(Paper).where(Paper.id == paper_id).values(
                     sentences_processed=True, processing_status=status
                 )
             )
+            logger.info(f"更新論文狀態 - paper_id: {paper_id}, affected_rows: {update_result.rowcount}, sentences_processed: True, status: {status}")
             
             # 4. 關鍵修復：確保提交事務
             await db.commit()
             logger.info(f"章節和句子資料已成功提交到資料庫 - paper_id: {paper_id}")
+            
+            # 4.5 驗證狀態更新是否成功
+            check_result = await db.execute(
+                select(Paper.sentences_processed, Paper.processing_status).where(Paper.id == paper_id)
+            )
+            check_data = check_result.first()
+            if check_data:
+                logger.info(f"狀態驗證 - paper_id: {paper_id}, sentences_processed: {check_data[0]}, processing_status: {check_data[1]}")
+                if not check_data[0]:
+                    logger.error(f"Critical Error: sentences_processed 狀態設置失敗！重新嘗試設置...")
+                    await db.execute(
+                        update(Paper).where(Paper.id == paper_id).values(sentences_processed=True)
+                    )
+                    await db.commit()
             
             # 5. 驗證資料是否真的插入成功
             sections_count = await db.execute(
