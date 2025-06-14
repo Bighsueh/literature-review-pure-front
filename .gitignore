@@ -116,3 +116,6 @@ backend/database/fix_missing_columns.sql
 docker_init_db.py
 fix_database.sql
 force_init_database.py
+
+# Backup directory for old migration files
+backend/backup/
