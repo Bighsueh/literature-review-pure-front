@@ -184,11 +184,15 @@ if python -c "
 import sys
 sys.path.append('backend')
 import asyncio
-from database.migration_manager import auto_migrate
+from simplified_migration import ensure_database_schema
 
 try:
-    asyncio.run(auto_migrate())
-    print('SUCCESS: 遷移完成')
+    success = asyncio.run(ensure_database_schema())
+    if success:
+        print('SUCCESS: 遷移完成')
+    else:
+        print('ERROR: 遷移失敗')
+        sys.exit(1)
 except Exception as e:
     print(f'ERROR: 遷移失敗 - {e}')
     sys.exit(1)

@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
         logger.info("資料庫初始化完成")
         
         # 執行自動遷移檢查和執行
-        from .core.migration_manager import ensure_database_schema
+        from .simplified_migration import ensure_database_schema
         schema_ok = await ensure_database_schema()
         if schema_ok:
             logger.info("資料庫結構檢查完成")
