@@ -367,22 +367,6 @@ const PaperSelectionPanel: React.FC<PaperSelectionPanelProps> = ({ className = '
         )}
       </div>
 
-      {/* 選取狀態提示 */}
-      {selectedCount > 0 && (
-        <div className="flex-shrink-0 p-3 bg-blue-50 border-t border-blue-200">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-blue-700">
-              已選取 {selectedCount} 篇論文，可開始進行查詢分析
-            </span>
-            <button
-              onClick={handleDeselectAll}
-              className="text-sm text-blue-600 hover:text-blue-800 underline"
-            >
-              清除選取
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
