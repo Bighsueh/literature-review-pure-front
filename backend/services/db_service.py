@@ -187,9 +187,11 @@ class DatabaseService:
                     "id": s["sentence_id"], 
                     "paper_id": paper_id, 
                     "section_id": s["section_id"],
-                    "sentence_text": s["text"], 
+                    "content": s["text"], 
                     "word_count": s.get("word_count"),
-                    "sentence_order": s.get("order", 0)
+                    "sentence_order": s.get("order", 0),
+                    "detection_status": "unknown",
+                    "retry_count": 0
                 })
             
             if sentences_to_insert:
@@ -251,17 +253,18 @@ class DatabaseService:
         result = await db.execute(query)
         return [
             {
-                "id": str(s.id), "text": s.sentence_text, "section_id": str(s.section_id)
+                "id": str(s.id), "text": s.content, "section_id": str(s.section_id)
             } for s in result.scalars().all()
         ]
 
     async def save_od_cd_results(self, db: AsyncSession, paper_id: str, od_cd_results: List[Dict[str, Any]], status: str = "processing"):
-        """增量更新句子的 OD/CD 分析結果"""
+        """增量更新句子的檢測分析結果"""
         update_statements = [
             update(Sentence).where(Sentence.id == result['id']).values(
-                defining_type=result.get("od_cd_type", "UNKNOWN"),
-                analysis_reason=result.get("explanation", ""),
-                confidence_score=result.get("confidence", 0.0),
+                has_objective=result.get("has_objective", None),
+                has_dataset=result.get("has_dataset", None),
+                has_contribution=result.get("has_contribution", None),
+                explanation=result.get("explanation", ""),
                 detection_status=result.get("detection_status", "success")
             ) for result in od_cd_results
         ]
@@ -272,7 +275,9 @@ class DatabaseService:
         # 更新論文主記錄狀態
         await db.execute(
             update(Paper).where(Paper.id == paper_id).values(
-                od_cd_processed=True, processing_status=status
+                od_cd_processed=True, 
+                sentences_processed=True,  # 添加這個標記
+                processing_status=status
             )
         )
         # No commit here
@@ -351,9 +356,8 @@ class DatabaseService:
         """搜尋句子"""
         query = (
             select(
-                Sentence.sentence_text,
-                Sentence.defining_type,
-                Sentence.page_num,
+                Sentence.content,
+                Sentence.detection_status,
                 PaperSection.section_type,
                 Paper.file_name,
                 Paper.id.label('paper_id')
@@ -368,15 +372,15 @@ class DatabaseService:
         
         if keywords:
             keyword_conditions = [
-                Sentence.sentence_text.ilike(f"%{keyword}%") for keyword in keywords
+                Sentence.content.ilike(f"%{keyword}%") for keyword in keywords
             ]
             query = query.where(or_(*keyword_conditions))
         
         result = await db.execute(query)
         return [
             {
-                "sentence_text": row.sentence_text,
-                "defining_type": row.defining_type,
+                "content": row.content,
+                "detection_status": row.detection_status,
                 "page_num": row.page_num,
                 "section_type": row.section_type,
                 "file_name": row.file_name,
@@ -404,9 +408,11 @@ class DatabaseService:
         
         return [
             {
-                "text": sentence.sentence_text,
-                "type": sentence.defining_type,
-                "page_num": sentence.page_num
+                "text": sentence.content,
+                "detection_status": sentence.detection_status,
+                "has_objective": sentence.has_objective,
+                "has_dataset": sentence.has_dataset,
+                "has_contribution": sentence.has_contribution
             }
             for sentence in sentences
         ]
@@ -415,7 +421,7 @@ class DatabaseService:
                                          keywords: List[str]) -> List[Dict[str, Any]]:
         """根據關鍵詞搜尋句子"""
         keyword_conditions = [
-            Sentence.sentence_text.ilike(f"%{keyword}%") for keyword in keywords
+            Sentence.content.ilike(f"%{keyword}%") for keyword in keywords
         ]
         
         query = (
@@ -433,9 +439,11 @@ class DatabaseService:
         
         return [
             {
-                "text": sentence.sentence_text,
-                "page_num": sentence.page_num,
-                "defining_type": sentence.defining_type
+                "text": sentence.content,
+                "detection_status": sentence.detection_status,
+                "has_objective": sentence.has_objective,
+                "has_dataset": sentence.has_dataset,
+                "has_contribution": sentence.has_contribution
             }
             for sentence in sentences
         ]
@@ -452,11 +460,13 @@ class DatabaseService:
         
         return [
             {
-                "text": sentence.sentence_text,
-                "page_num": sentence.page_num,
-                "defining_type": sentence.defining_type,
+                "text": sentence.content,
                 "sentence_order": sentence.sentence_order,
-                "id": str(sentence.id)
+                "id": str(sentence.id),
+                "detection_status": sentence.detection_status,
+                "has_objective": sentence.has_objective,
+                "has_dataset": sentence.has_dataset,
+                "has_contribution": sentence.has_contribution
             }
             for sentence in sentences
         ]
@@ -550,13 +560,15 @@ class DatabaseService:
             sentences = []
             for sentence, section in sentence_section_pairs:
                 sentences.append({
-                    "text": sentence.sentence_text,
-                    "page_num": sentence.page_num,
-                    "defining_type": sentence.defining_type,
+                    "text": sentence.content,
                     "sentence_order": sentence.sentence_order,
                     "id": str(sentence.id),
                     "section_id": str(sentence.section_id),
-                    "analysis_reason": sentence.analysis_reason
+                    "detection_status": sentence.detection_status,
+                    "has_objective": sentence.has_objective,
+                    "has_dataset": sentence.has_dataset,
+                    "has_contribution": sentence.has_contribution,
+                    "explanation": sentence.explanation
                 })
             
             logger.info(f"找到 {len(sentences)} 個句子 for paper: {paper_name}, section: {section_type}")

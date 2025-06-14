@@ -486,15 +486,16 @@ async def get_paper_sentences(
             "sentences": [
                 {
                     "id": str(sentence.id),
-                    "content": sentence.sentence_text,
-                    "type": "UNKNOWN" if sentence.defining_type in [None, "", "NONE"] else sentence.defining_type,
-                    "reason": sentence.analysis_reason or sentence.explanation or "",
-                    "pageNumber": sentence.page_num,
+                    "content": sentence.content,
+                    "detection_status": sentence.detection_status,
+                    "has_objective": sentence.has_objective,
+                    "has_dataset": sentence.has_dataset,
+                    "has_contribution": sentence.has_contribution,
+                    "explanation": sentence.explanation or "",
                     "fileName": paper.original_filename or paper.file_name,
                     "fileId": paper_id,
                     "sentenceOrder": sentence.sentence_order,
                     "sectionId": str(sentence.section_id) if sentence.section_id else None,
-                    "confidence": float(sentence.confidence_score) if sentence.confidence_score else None,
                     "wordCount": sentence.word_count
                 }
                 for sentence in sentences
@@ -548,15 +549,16 @@ async def get_all_selected_papers_sentences(db: AsyncSession = Depends(get_db)):
             for sentence in sentences:
                 all_sentences.append({
                     "id": str(sentence.id),
-                    "content": sentence.sentence_text,
-                    "type": "UNKNOWN" if sentence.defining_type in [None, "", "NONE"] else sentence.defining_type,
-                    "reason": sentence.analysis_reason or sentence.explanation or "",
-                    "pageNumber": sentence.page_num,
+                    "content": sentence.content,
+                    "detection_status": sentence.detection_status,
+                    "has_objective": sentence.has_objective,
+                    "has_dataset": sentence.has_dataset,
+                    "has_contribution": sentence.has_contribution,
+                    "explanation": sentence.explanation or "",
                     "fileName": paper.original_filename or paper.file_name,
                     "fileId": str(paper.id),
                     "sentenceOrder": sentence.sentence_order,
                     "sectionId": str(sentence.section_id) if sentence.section_id else None,
-                    "confidence": float(sentence.confidence_score) if sentence.confidence_score else None,
                     "wordCount": sentence.word_count
                 })
         
