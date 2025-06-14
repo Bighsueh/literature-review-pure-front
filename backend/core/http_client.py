@@ -255,7 +255,10 @@ class HTTPClient:
                 self.cache_misses += 1
         
         # 準備請求參數
-        request_timeout = aiohttp.ClientTimeout(total=timeout) if timeout else self.timeout
+        if timeout:
+            request_timeout = aiohttp.ClientTimeout(total=timeout)
+        else:
+            request_timeout = self.timeout
         request_headers = headers or {}
         
         # 重試邏輯

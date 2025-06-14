@@ -452,13 +452,29 @@ class UnifiedQueryProcessor:
         self, 
         sentences: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """篩選定義句子 (OD/CD)"""
+        """篩選定義句子 (基於布林欄位)"""
         definition_sentences = []
         
         for sentence in sentences:
-            defining_type = sentence.get("defining_type")
-            if defining_type in ["OD", "CD"]:
-                definition_sentences.append(sentence)
+            # 使用實際的布林欄位檢查是否為定義句子
+            has_objective = sentence.get("has_objective", False)
+            has_dataset = sentence.get("has_dataset", False) 
+            has_contribution = sentence.get("has_contribution", False)
+            
+            # 如果任一布林欄位為 True，則視為定義句子
+            if has_objective or has_dataset or has_contribution:
+                # 為了保持與後續處理的相容性，添加 defining_type 欄位
+                sentence_copy = sentence.copy()
+                
+                # 根據布林欄位決定 defining_type
+                if has_objective:
+                    sentence_copy["defining_type"] = "OD"  # Objective Definition
+                elif has_dataset:
+                    sentence_copy["defining_type"] = "CD"  # Conceptual Definition (Dataset)
+                elif has_contribution:
+                    sentence_copy["defining_type"] = "CD"  # Conceptual Definition (Contribution)
+                
+                definition_sentences.append(sentence_copy)
         
         return definition_sentences
     

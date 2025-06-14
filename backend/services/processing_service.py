@@ -631,6 +631,15 @@ class ProcessingService:
                             defining_type = result.get("defining_type", "UNKNOWN").upper()
                             is_od_cd = defining_type in ["OD", "CD"]
                             
+                            # 根據 defining_type 設置布林欄位
+                            has_objective = defining_type == "OD"
+                            has_dataset = defining_type == "CD" and "dataset" in result.get("reason", "").lower()
+                            has_contribution = defining_type == "CD" and "contribution" in result.get("reason", "").lower()
+                            
+                            # 如果是 CD 但無法細分，預設為 has_contribution
+                            if defining_type == "CD" and not has_dataset and not has_contribution:
+                                has_contribution = True
+                            
                             return {
                                 **sentence_data,
                                 "is_od_cd": is_od_cd,
@@ -638,7 +647,11 @@ class ProcessingService:
                                 "od_cd_type": defining_type,
                                 "explanation": result.get("reason", ""),
                                 "detection_status": "success",
-                                "retry_count": attempt
+                                "retry_count": attempt,
+                                # 添加布林欄位供資料庫儲存使用
+                                "has_objective": has_objective,
+                                "has_dataset": has_dataset,
+                                "has_contribution": has_contribution
                             }
                         else:
                             # API返回錯誤，但不重試，因為可能是業務邏輯問題
@@ -665,7 +678,11 @@ class ProcessingService:
                 "od_cd_type": "ERROR",
                 "explanation": f"API調用失敗，經過 {max_retries} 次重試",
                 "detection_status": "error",
-                "retry_count": max_retries
+                "retry_count": max_retries,
+                # 錯誤情況下的布林欄位
+                "has_objective": False,
+                "has_dataset": False,
+                "has_contribution": False
             }
         
         # 為每個句子創建檢測任務
@@ -696,7 +713,11 @@ class ProcessingService:
                     "od_cd_type": "ERROR",
                     "explanation": f"任務執行異常: {str(result)}",
                     "detection_status": "error",
-                    "retry_count": 3
+                    "retry_count": 3,
+                    # 異常情況下的布林欄位
+                    "has_objective": False,
+                    "has_dataset": False,
+                    "has_contribution": False
                 }
                 error_count += 1
             else:

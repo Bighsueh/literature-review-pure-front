@@ -41,6 +41,7 @@ from .api.upload import router as files_router
 from .api.papers import router as papers_router
 from .api.processing import router as processing_router
 from .api.health import router as health_router
+from .api.debug import router as debug_router
 
 
 # 設置日誌
@@ -254,6 +255,7 @@ app.include_router(files_router, prefix="/api", tags=["upload"])
 app.include_router(papers_router, prefix="/api", tags=["papers"])
 app.include_router(processing_router, prefix="/api", tags=["processing"])
 app.include_router(health_router, tags=["健康檢查"])
+app.include_router(debug_router, prefix="/api", tags=["debug"])
 
 
 @app.get("/")
