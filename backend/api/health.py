@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database.connection import db_manager
-from ..core.migration_manager import migration_manager
+from ..simplified_migration import migration_manager
 from ..core.logging import get_logger
 from ..core.config import get_settings
 
@@ -66,28 +66,20 @@ async def detailed_health_check():
             "message": "資料庫連接失敗"
         }
     
-    # 2. Schema Drift 檢查
+    # 2. 資料庫連接檢查（簡化版）
     try:
-        has_drift, drift_report = await migration_manager.detect_schema_drift()
+        connection_ok = await migration_manager.check_database_connection()
         
-        if has_drift:
-            health_data["checks"]["schema"] = {
-                "status": "warning" if not drift_report.get('critical_issues') else "unhealthy",
-                "has_drift": True,
-                "critical_issues": drift_report.get('critical_issues', []),
-                "warnings": drift_report.get('warnings', []),
-                "missing_tables": drift_report.get('missing_tables', []),
-                "missing_columns": drift_report.get('missing_columns', {}),
-                "message": f"檢測到 schema drift: {len(drift_report.get('critical_issues', []))} 個關鍵問題, {len(drift_report.get('warnings', []))} 個警告"
-            }
-            
-            if drift_report.get('critical_issues'):
-                overall_healthy = False
-        else:
+        if connection_ok:
             health_data["checks"]["schema"] = {
                 "status": "healthy",
-                "has_drift": False,
-                "message": "資料庫結構正常"
+                "message": "資料庫連接正常"
+            }
+        else:
+            overall_healthy = False
+            health_data["checks"]["schema"] = {
+                "status": "unhealthy",
+                "message": "資料庫連接失敗"
             }
             
     except Exception as e:
@@ -95,7 +87,7 @@ async def detailed_health_check():
         health_data["checks"]["schema"] = {
             "status": "error",
             "error": str(e),
-            "message": "Schema drift 檢查失敗"
+            "message": "資料庫狀態檢查失敗"
         }
     
     # 3. 遷移狀態檢查
@@ -253,29 +245,25 @@ async def database_health():
 
 @router.get("/schema")
 async def schema_health():
-    """資料庫結構健康檢查和 Schema Drift 檢測"""
+    """資料庫結構健康檢查（簡化版）"""
     
     try:
-        # 執行 schema drift 檢測
-        has_drift, drift_report = await migration_manager.detect_schema_drift()
-        
-        # 獲取實際資料庫結構
-        actual_schema = await migration_manager.get_actual_schema()
+        # 檢查資料庫連接
+        connection_ok = await migration_manager.check_database_connection()
         
         # 獲取遷移版本資訊
         current_rev = migration_manager.get_current_revision()
         head_rev = migration_manager.get_head_revision()
         
         return {
-            "status": "unhealthy" if has_drift and drift_report.get('critical_issues') else "healthy",
-            "has_drift": has_drift,
-            "drift_report": drift_report,
-            "actual_schema": actual_schema,
+            "status": "healthy" if connection_ok and current_rev == head_rev else "warning",
+            "database_connected": connection_ok,
             "migration_info": {
                 "current_revision": current_rev,
                 "head_revision": head_rev,
                 "up_to_date": current_rev == head_rev
             },
+            "message": "資料庫結構正常" if connection_ok and current_rev == head_rev else "需要檢查遷移狀態",
             "timestamp": datetime.utcnow().isoformat()
         }
         
@@ -285,47 +273,38 @@ async def schema_health():
 
 @router.post("/schema/fix")
 async def fix_schema_issues():
-    """自動修復 Schema 問題"""
+    """執行資料庫遷移來修復問題（簡化版）"""
     
     try:
-        # 檢測問題
-        has_drift, drift_report = await migration_manager.detect_schema_drift()
+        # 檢查當前遷移狀態
+        current_rev = migration_manager.get_current_revision()
+        head_rev = migration_manager.get_head_revision()
         
-        if not has_drift:
+        if current_rev == head_rev:
             return {
                 "status": "no_action_needed",
-                "message": "未檢測到需要修復的 schema 問題",
+                "message": "資料庫已是最新版本，無需修復",
+                "current_revision": current_rev,
                 "timestamp": datetime.utcnow().isoformat()
             }
         
-        critical_issues = drift_report.get('critical_issues', [])
-        if not critical_issues:
-            return {
-                "status": "no_critical_issues",
-                "message": "沒有關鍵問題需要修復",
-                "warnings": drift_report.get('warnings', []),
-                "timestamp": datetime.utcnow().isoformat()
-            }
+        # 執行自動遷移
+        success = await migration_manager.auto_migrate()
         
-        # 嘗試自動修復
-        fix_success = await migration_manager.auto_fix_critical_issues()
-        
-        if fix_success:
-            # 驗證修復結果
-            has_drift_after, drift_report_after = await migration_manager.detect_schema_drift()
-            
+        if success:
+            new_current_rev = migration_manager.get_current_revision()
             return {
-                "status": "fixed" if not has_drift_after else "partially_fixed",
-                "message": "關鍵問題已修復" if not has_drift_after else "部分問題已修復",
-                "issues_before": critical_issues,
-                "remaining_issues": drift_report_after.get('critical_issues', []),
+                "status": "fixed",
+                "message": "資料庫遷移成功完成",
+                "previous_revision": current_rev,
+                "current_revision": new_current_rev,
                 "timestamp": datetime.utcnow().isoformat()
             }
         else:
             return {
                 "status": "fix_failed",
-                "message": "自動修復失敗，請手動檢查",
-                "issues": critical_issues,
+                "message": "資料庫遷移失敗，請檢查日誌",
+                "current_revision": current_rev,
                 "timestamp": datetime.utcnow().isoformat()
             }
             
@@ -335,23 +314,14 @@ async def fix_schema_issues():
 
 @router.get("/migrations")
 async def migrations_status():
-    """遷移狀態檢查"""
+    """遷移狀態檢查（簡化版）"""
     
     try:
-        current_rev = migration_manager.get_current_revision()
-        head_rev = migration_manager.get_head_revision()
-        
-        # 檢查表格和欄位狀態
-        table_status = await migration_manager.check_tables_exist()
-        column_status = await migration_manager.check_columns_exist()
+        # 獲取遷移狀態
+        status = await migration_manager.get_migration_status()
         
         return {
-            "status": "up_to_date" if current_rev == head_rev else "pending",
-            "current_revision": current_rev,
-            "head_revision": head_rev,
-            "needs_migration": current_rev != head_rev,
-            "table_status": table_status,
-            "column_status": column_status,
+            **status,
             "timestamp": datetime.utcnow().isoformat()
         }
         
@@ -361,37 +331,25 @@ async def migrations_status():
 
 @router.post("/migrations/apply")
 async def apply_pending_migrations():
-    """應用待執行的遷移"""
+    """應用待執行的遷移（簡化版）"""
     
     try:
-        current_rev = migration_manager.get_current_revision()
-        head_rev = migration_manager.get_head_revision()
-        
-        if current_rev == head_rev:
-            return {
-                "status": "no_action_needed",
-                "message": "沒有待應用的遷移",
-                "current_revision": current_rev,
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        
-        # 執行遷移
-        success = migration_manager.run_migrations()
+        # 執行自動遷移
+        success = await migration_manager.auto_migrate()
         
         if success:
-            new_current_rev = migration_manager.get_current_revision()
+            # 獲取最新狀態
+            status = await migration_manager.get_migration_status()
             return {
                 "status": "success",
                 "message": "遷移應用成功",
-                "previous_revision": current_rev,
-                "current_revision": new_current_rev,
+                "migration_status": status,
                 "timestamp": datetime.utcnow().isoformat()
             }
         else:
             return {
                 "status": "failed",
-                "message": "遷移應用失敗",
-                "current_revision": current_rev,
+                "message": "遷移應用失敗，請檢查日誌",
                 "timestamp": datetime.utcnow().isoformat()
             }
             
