@@ -321,7 +321,9 @@ const ResponsiveMainLayout: React.FC = () => {
           </div>
         </div>
 
-        <WelcomeTour activePanel={activePanel} />
+        <WelcomeTour 
+          activePanel={activePanel} 
+        />
         {renderModal()}
       </div>
     );
@@ -356,7 +358,9 @@ const ResponsiveMainLayout: React.FC = () => {
           </div>
         </div>
 
-        <WelcomeTour activePanel={activePanel} />
+        <WelcomeTour 
+          activePanel={activePanel} 
+        />
         {renderModal()}
       </div>
     );
@@ -391,7 +395,9 @@ const ResponsiveMainLayout: React.FC = () => {
         {renderPanelIndicator()}
       </div>
 
-      <WelcomeTour activePanel={activePanel} />
+      <WelcomeTour 
+        activePanel={activePanel} 
+      />
       {renderModal()}
     </div>
   );
