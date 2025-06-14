@@ -5,7 +5,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- 論文管理表 (加入TEI XML儲存，簡化使用者管理)
-CREATE TABLE papers (
+CREATE TABLE IF NOT EXISTS papers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     file_name VARCHAR(255) NOT NULL,
     original_filename VARCHAR(255),
@@ -15,6 +15,7 @@ CREATE TABLE papers (
     file_hash VARCHAR(64) UNIQUE, -- 用於檔案去重
     grobid_processed BOOLEAN DEFAULT FALSE,
     sentences_processed BOOLEAN DEFAULT FALSE,
+    od_cd_processed BOOLEAN DEFAULT FALSE, -- 新增缺失的欄位
     pdf_deleted BOOLEAN DEFAULT FALSE, -- 標記PDF是否已刪除
     error_message TEXT,
     -- TEI XML 儲存 (新增)
@@ -25,7 +26,7 @@ CREATE TABLE papers (
 );
 
 -- 論文分區表
-CREATE TABLE paper_sections (
+CREATE TABLE IF NOT EXISTS paper_sections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
     section_type VARCHAR(50) NOT NULL, -- introduction, abstract, method, etc.
@@ -39,23 +40,28 @@ CREATE TABLE paper_sections (
 );
 
 -- 句子資料表  
-CREATE TABLE sentences (
+CREATE TABLE IF NOT EXISTS sentences (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
     section_id UUID REFERENCES paper_sections(id) ON DELETE CASCADE,
-    sentence_text TEXT NOT NULL,
-    page_num INTEGER,
+    content TEXT NOT NULL, -- 改為 content
     sentence_order INTEGER,
-    defining_type VARCHAR(20) DEFAULT 'UNKNOWN', -- OD, CD, OTHER, UNKNOWN
-    analysis_reason TEXT,
-    -- 新增欄位
     word_count INTEGER, -- 句子字數
-    confidence_score DECIMAL(3,2), -- OD/CD分析信心度
-    processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    char_count INTEGER, -- 字符數
+    -- 檢測結果欄位
+    has_objective BOOLEAN DEFAULT NULL,
+    has_dataset BOOLEAN DEFAULT NULL,
+    has_contribution BOOLEAN DEFAULT NULL,
+    detection_status VARCHAR(20) DEFAULT 'unknown',
+    error_message TEXT,
+    retry_count INTEGER DEFAULT 0,
+    explanation TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 全域論文選擇狀態表 (簡化為單一使用者模式)
-CREATE TABLE paper_selections (
+CREATE TABLE IF NOT EXISTS paper_selections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
     is_selected BOOLEAN DEFAULT TRUE,
@@ -64,7 +70,7 @@ CREATE TABLE paper_selections (
 );
 
 -- 處理佇列表 (用於FastAPI後端批次處理)
-CREATE TABLE processing_queue (
+CREATE TABLE IF NOT EXISTS processing_queue (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
     processing_stage VARCHAR(50) NOT NULL,
@@ -80,7 +86,7 @@ CREATE TABLE processing_queue (
 );
 
 -- 系統設定表 (用於存放全域設定)
-CREATE TABLE system_settings (
+CREATE TABLE IF NOT EXISTS system_settings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     setting_key VARCHAR(100) UNIQUE NOT NULL,
     setting_value JSONB,
@@ -89,7 +95,7 @@ CREATE TABLE system_settings (
 );
 
 -- 處理任務表 (新增 - 用於追蹤所有處理任務)
-CREATE TABLE processing_tasks (
+CREATE TABLE IF NOT EXISTS processing_tasks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     paper_id UUID REFERENCES papers(id) ON DELETE CASCADE,
     task_id VARCHAR(64) NOT NULL UNIQUE,
@@ -110,7 +116,7 @@ CREATE TABLE processing_tasks (
 );
 
 -- 處理事件表 (新增 - 用於追蹤處理過程中的事件)
-CREATE TABLE processing_events (
+CREATE TABLE IF NOT EXISTS processing_events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     task_id UUID REFERENCES processing_tasks(id) ON DELETE CASCADE,
     event_type VARCHAR(50) NOT NULL, -- progress_update, step_completed, error, warning
@@ -124,7 +130,7 @@ CREATE TABLE processing_events (
 );
 
 -- 處理錯誤表 (新增 - 用於詳細記錄錯誤資訊)
-CREATE TABLE processing_errors (
+CREATE TABLE IF NOT EXISTS processing_errors (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     task_id UUID REFERENCES processing_tasks(id) ON DELETE CASCADE,
     error_type VARCHAR(50) NOT NULL, -- validation_error, grobid_error, n8n_error, db_error
@@ -139,37 +145,41 @@ CREATE TABLE processing_errors (
 );
 
 -- 建立索引以提升查詢效能
-CREATE INDEX idx_papers_hash ON papers(file_hash);
-CREATE INDEX idx_papers_status ON papers(processing_status);
-CREATE INDEX idx_papers_created_at ON papers(created_at);
+CREATE INDEX IF NOT EXISTS idx_papers_hash ON papers(file_hash);
+CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(processing_status);
+CREATE INDEX IF NOT EXISTS idx_papers_created_at ON papers(created_at);
 
-CREATE INDEX idx_sections_paper_id ON paper_sections(paper_id);
-CREATE INDEX idx_sections_type ON paper_sections(section_type);
+CREATE INDEX IF NOT EXISTS idx_sections_paper_id ON paper_sections(paper_id);
+CREATE INDEX IF NOT EXISTS idx_sections_type ON paper_sections(section_type);
 
-CREATE INDEX idx_sentences_defining_type ON sentences(defining_type);
-CREATE INDEX idx_sentences_paper_section ON sentences(paper_id, section_id);
-CREATE INDEX idx_sentences_text_search ON sentences USING gin(to_tsvector('english', sentence_text));
+CREATE INDEX IF NOT EXISTS idx_sentences_detection_status ON sentences(detection_status);
+CREATE INDEX IF NOT EXISTS idx_sentences_paper_section ON sentences(paper_id, section_id);
+CREATE INDEX IF NOT EXISTS idx_sentences_text_search ON sentences USING gin(to_tsvector('english', content));
+CREATE INDEX IF NOT EXISTS idx_sentences_retry_count ON sentences(retry_count);
+CREATE INDEX IF NOT EXISTS idx_sentences_has_objective ON sentences(has_objective);
+CREATE INDEX IF NOT EXISTS idx_sentences_has_dataset ON sentences(has_dataset);
+CREATE INDEX IF NOT EXISTS idx_sentences_has_contribution ON sentences(has_contribution);
 
-CREATE INDEX idx_queue_status_priority ON processing_queue(status, priority);
-CREATE INDEX idx_queue_paper_stage ON processing_queue(paper_id, processing_stage);
+CREATE INDEX IF NOT EXISTS idx_queue_status_priority ON processing_queue(status, priority);
+CREATE INDEX IF NOT EXISTS idx_queue_paper_stage ON processing_queue(paper_id, processing_stage);
 
-CREATE INDEX idx_selections_paper ON paper_selections(paper_id);
+CREATE INDEX IF NOT EXISTS idx_selections_paper ON paper_selections(paper_id);
 
 -- 新表的索引
-CREATE INDEX idx_processing_tasks_paper_id ON processing_tasks(paper_id);
-CREATE INDEX idx_processing_tasks_task_id ON processing_tasks(task_id);
-CREATE INDEX idx_processing_tasks_status ON processing_tasks(status);
-CREATE INDEX idx_processing_tasks_created_at ON processing_tasks(created_at);
-CREATE INDEX idx_processing_tasks_parent ON processing_tasks(parent_task_id);
+CREATE INDEX IF NOT EXISTS idx_processing_tasks_paper_id ON processing_tasks(paper_id);
+CREATE INDEX IF NOT EXISTS idx_processing_tasks_task_id ON processing_tasks(task_id);
+CREATE INDEX IF NOT EXISTS idx_processing_tasks_status ON processing_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_processing_tasks_created_at ON processing_tasks(created_at);
+CREATE INDEX IF NOT EXISTS idx_processing_tasks_parent ON processing_tasks(parent_task_id);
 
-CREATE INDEX idx_processing_events_task_id ON processing_events(task_id);
-CREATE INDEX idx_processing_events_type ON processing_events(event_type);
-CREATE INDEX idx_processing_events_created_at ON processing_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_processing_events_task_id ON processing_events(task_id);
+CREATE INDEX IF NOT EXISTS idx_processing_events_type ON processing_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_processing_events_created_at ON processing_events(created_at);
 
-CREATE INDEX idx_processing_errors_task_id ON processing_errors(task_id);
-CREATE INDEX idx_processing_errors_type ON processing_errors(error_type);
-CREATE INDEX idx_processing_errors_created_at ON processing_errors(created_at);
-CREATE INDEX idx_processing_errors_severity ON processing_errors(severity);
+CREATE INDEX IF NOT EXISTS idx_processing_errors_task_id ON processing_errors(task_id);
+CREATE INDEX IF NOT EXISTS idx_processing_errors_type ON processing_errors(error_type);
+CREATE INDEX IF NOT EXISTS idx_processing_errors_created_at ON processing_errors(created_at);
+CREATE INDEX IF NOT EXISTS idx_processing_errors_severity ON processing_errors(severity);
 
 -- 插入初始系統設定
 INSERT INTO system_settings (setting_key, setting_value, description) VALUES

@@ -822,17 +822,16 @@ class ProcessingService:
                             "id": sentence_data["sentence_id"],
                             "paper_id": paper_id,
                             "section_id": sentence_data["section_id"],
-                            "sentence_text": sentence_data["sentence_text"],
-                            "page_num": sentence_data.get("page"),
+                            "content": sentence_data.get("sentence_text", sentence_data.get("text", "")),
                             "sentence_order": sentence_data.get("order"),
-                            "defining_type": sentence_data.get("is_od_cd", "UNKNOWN"),
-                            "analysis_reason": sentence_data.get("reason"),
-                            "word_count": len(sentence_data["sentence_text"].split()),
-                            "confidence_score": sentence_data.get("confidence"),
+                            "word_count": len(sentence_data.get("sentence_text", sentence_data.get("text", "")).split()),
                             "detection_status": sentence_data.get("detection_status", "completed"),
                             "error_message": sentence_data.get("error_message"),
                             "retry_count": sentence_data.get("retry_count", 0),
                             "explanation": sentence_data.get("explanation"),
+                            "has_objective": sentence_data.get("has_objective"),
+                            "has_dataset": sentence_data.get("has_dataset"),
+                            "has_contribution": sentence_data.get("has_contribution"),
                         })
                 
                 if sentences_to_insert:
@@ -840,17 +839,16 @@ class ProcessingService:
                     stmt = stmt.on_conflict_do_update(
                         index_elements=['id'],
                         set_={
-                            "sentence_text": stmt.excluded.sentence_text,
-                            "page_num": stmt.excluded.page_num,
+                            "content": stmt.excluded.content,
                             "sentence_order": stmt.excluded.sentence_order,
-                            "defining_type": stmt.excluded.defining_type,
-                            "analysis_reason": stmt.excluded.analysis_reason,
                             "word_count": stmt.excluded.word_count,
-                            "confidence_score": stmt.excluded.confidence_score,
                             "detection_status": stmt.excluded.detection_status,
                             "error_message": stmt.excluded.error_message,
                             "retry_count": stmt.excluded.retry_count,
                             "explanation": stmt.excluded.explanation,
+                            "has_objective": stmt.excluded.has_objective,
+                            "has_dataset": stmt.excluded.has_dataset,
+                            "has_contribution": stmt.excluded.has_contribution,
                         }
                     )
                     await session.execute(stmt)
@@ -960,8 +958,8 @@ class ProcessingService:
                 and_(
                     Sentence.paper_id == paper_id,
                     or_(
-                        Sentence.sentence_text.is_(None),
-                        func.length(Sentence.sentence_text) < 5
+                        Sentence.content.is_(None),
+                        func.length(Sentence.content) < 5
                     )
                 )
             )

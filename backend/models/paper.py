@@ -62,24 +62,34 @@ class Sentence(Base):
     id = Column(UUID, primary_key=True, default=uuid.uuid4)
     paper_id = Column(UUID, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
     section_id = Column(UUID, ForeignKey('paper_sections.id', ondelete='CASCADE'), nullable=False)
-    sentence_text = Column(Text, nullable=False)
-    page_num = Column(Integer)
+    content = Column(Text, nullable=False)
     sentence_order = Column(Integer)
-    defining_type = Column(String(20), default='UNKNOWN')
-    analysis_reason = Column(Text)
     word_count = Column(Integer)
-    confidence_score = Column(DECIMAL(3,2))
-    processed_timestamp = Column(TIMESTAMP, default=func.current_timestamp())
+    char_count = Column(Integer)
     
-    # 新增的重試機制相關欄位
+    # 檢測結果欄位
+    has_objective = Column(Boolean, default=None)
+    has_dataset = Column(Boolean, default=None)
+    has_contribution = Column(Boolean, default=None)
     detection_status = Column(String(20), default='unknown')
     error_message = Column(Text)
     retry_count = Column(Integer, default=0)
     explanation = Column(Text)
+    created_at = Column(TIMESTAMP, default=func.current_timestamp())
+    updated_at = Column(TIMESTAMP, default=func.current_timestamp())
     
     # Relationships
     paper = relationship("Paper", back_populates="sentences")
     section = relationship("PaperSection", back_populates="sentences")
+
+    # 為了向後相容，添加一個屬性別名
+    @property
+    def sentence_text(self):
+        return self.content
+    
+    @sentence_text.setter
+    def sentence_text(self, value):
+        self.content = value
 
 class PaperSelection(Base):
     __tablename__ = "paper_selections"
@@ -193,18 +203,27 @@ class SectionResponse(SectionBase):
 
 # Sentence schemas
 class SentenceBase(BaseModel):
-    sentence_text: str
-    page_num: Optional[int] = None
+    content: str  # 改為 content
     sentence_order: Optional[int] = None
-    defining_type: DefiningTypeEnum = DefiningTypeEnum.UNKNOWN
-    analysis_reason: Optional[str] = None
     word_count: Optional[int] = None
-    confidence_score: Optional[float] = None
-    # 新增的重試機制相關欄位
+    char_count: Optional[int] = None
+    # 檢測結果欄位
+    has_objective: Optional[bool] = None
+    has_dataset: Optional[bool] = None
+    has_contribution: Optional[bool] = None
     detection_status: Optional[str] = 'unknown'
     error_message: Optional[str] = None
     retry_count: Optional[int] = 0
     explanation: Optional[str] = None
+    
+    # 為了向後相容，添加一個屬性別名
+    @property
+    def sentence_text(self):
+        return self.content
+    
+    @sentence_text.setter
+    def sentence_text(self, value):
+        self.content = value
 
 class SentenceCreate(SentenceBase):
     paper_id: str
@@ -214,7 +233,8 @@ class SentenceResponse(SentenceBase):
     id: str
     paper_id: str
     section_id: str
-    processed_timestamp: datetime
+    created_at: datetime
+    updated_at: datetime
     
     class Config:
         from_attributes = True
