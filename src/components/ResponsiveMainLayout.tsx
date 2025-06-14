@@ -24,6 +24,8 @@ const ResponsiveMainLayout: React.FC = () => {
   // 滑動相關狀態
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [touchEnd, setTouchEnd] = useState<{ x: number; y: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState(0);
   const mainContentRef = useRef<HTMLDivElement>(null);
 
   // 面板順序
@@ -69,6 +71,8 @@ const ResponsiveMainLayout: React.FC = () => {
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     if (!isMobile) return;
     setTouchEnd(null);
+    setDragOffset(0);
+    setIsDragging(false);
     setTouchStart({
       x: e.targetTouches[0].clientX,
       y: e.targetTouches[0].clientY
@@ -77,20 +81,54 @@ const ResponsiveMainLayout: React.FC = () => {
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
     if (!isMobile || !touchStart) return;
-    setTouchEnd({
+    
+    const currentTouch = {
       x: e.targetTouches[0].clientX,
       y: e.targetTouches[0].clientY
-    });
-  }, [isMobile, touchStart]);
+    };
+    
+    setTouchEnd(currentTouch);
+    
+    const distanceX = currentTouch.x - touchStart.x; // 修正：當前位置減去起始位置
+    const distanceY = currentTouch.y - touchStart.y;
+    
+    // 判斷是否為水平滑動
+    if (Math.abs(distanceX) > Math.abs(distanceY) && Math.abs(distanceX) > 10) {
+      setIsDragging(true);
+      
+      // 計算拖拽偏移量（vw 單位）
+      const currentIndex = panelOrder.indexOf(activePanel);
+      const maxOffset = 30; // 最大偏移量（vw）
+      let offset = (distanceX / window.innerWidth) * 100; // 轉換為 vw
+      
+      // 限制邊界 - 防止滑動超出範圍
+      if (currentIndex === 0 && offset > 0) {
+        // 第一個面板，不能向右滑動太多
+        offset = Math.min(offset * 0.3, maxOffset);
+      } else if (currentIndex === panelOrder.length - 1 && offset < 0) {
+        // 最後一個面板，不能向左滑動太多
+        offset = Math.max(offset * 0.3, -maxOffset);
+      } else {
+        // 中間面板，限制偏移量
+        offset = Math.max(-maxOffset, Math.min(maxOffset, offset));
+      }
+      
+      setDragOffset(offset);
+    }
+  }, [isMobile, touchStart, activePanel, panelOrder]);
 
   const onTouchEnd = useCallback(() => {
     if (!isMobile || !touchStart || !touchEnd) return;
 
-    const distanceX = touchStart.x - touchEnd.x;
-    const distanceY = touchStart.y - touchEnd.y;
-    const isLeftSwipe = distanceX > minSwipeDistance;
-    const isRightSwipe = distanceX < -minSwipeDistance;
+    const distanceX = touchEnd.x - touchStart.x; // 修正：保持與 onTouchMove 一致
+    const distanceY = touchEnd.y - touchStart.y;
+    const isRightSwipe = distanceX > minSwipeDistance; // 向右滑動（正值）
+    const isLeftSwipe = distanceX < -minSwipeDistance; // 向左滑動（負值）
     const isVerticalSwipe = Math.abs(distanceY) > Math.abs(distanceX);
+
+    // 重置拖拽狀態
+    setIsDragging(false);
+    setDragOffset(0);
 
     // 如果是垂直滑動，不處理
     if (isVerticalSwipe) return;
@@ -104,7 +142,7 @@ const ResponsiveMainLayout: React.FC = () => {
       // 向右滑動，切換到上一個面板
       setActivePanel(panelOrder[currentIndex - 1]);
     }
-  }, [isMobile, touchStart, touchEnd, activePanel, minSwipeDistance]);
+  }, [isMobile, touchStart, touchEnd, activePanel, minSwipeDistance, panelOrder]);
 
   // 處理導航項目點擊
   const handleNavigationClick = (item: NavigationItem) => {
@@ -158,18 +196,57 @@ const ResponsiveMainLayout: React.FC = () => {
     return file?.name || '未知檔案';
   };
 
-  // 渲染移動版面板
-  const renderMobilePanel = () => {
-    switch (activePanel) {
-      case 'files':
-        return <LeftPanel onResize={handleLeftPanelResize} />;
-      case 'chat':
-        return <CenterPanel onReferenceClick={handleReferenceClick} />;
-      case 'progress':
-        return <RightPanel onResize={handleRightPanelResize} />;
-      default:
-        return <CenterPanel onReferenceClick={handleReferenceClick} />;
+  // 獲取當前面板索引
+  const getCurrentPanelIndex = () => {
+    return panelOrder.indexOf(activePanel);
+  };
+
+  // 渲染移動版面板容器
+  const renderMobilePanelContainer = () => {
+    const currentIndex = getCurrentPanelIndex();
+    // 簡化邏輯：每個面板移動 100vw（視窗寬度）
+    // 由於容器寬度是 300vw，每個面板寬度是 100vw
+    const baseTranslateX = -currentIndex * 100; // 每個面板移動 100vw
+    const finalTranslateX = baseTranslateX + dragOffset; // 加上拖拽偏移量
+    
+    // 根據是否正在拖拽來決定動畫
+    const transitionClass = isDragging ? '' : 'transition-transform duration-300 ease-out';
+    
+    // 調試信息（開發環境）
+    if (process.env.NODE_ENV === 'development' && isDragging) {
+      console.log(`Panel: ${activePanel}, Index: ${currentIndex}, Base: ${baseTranslateX}vw, Offset: ${dragOffset}vw, Final: ${finalTranslateX}vw`);
     }
+
+    return (
+      <div 
+        className={`flex h-full ${transitionClass}`}
+        style={{ 
+          transform: `translateX(${finalTranslateX}vw)`, // 使用 vw 單位更精確
+          width: '300vw' // 三個面板的總寬度，每個 100vw
+        }}
+      >
+        {/* Files Panel */}
+        <div className="h-full flex-shrink-0 overflow-hidden bg-white" style={{ width: '100vw' }}>
+          <div className="h-full w-full">
+            <LeftPanel onResize={handleLeftPanelResize} />
+          </div>
+        </div>
+        
+        {/* Chat Panel */}
+        <div className="h-full flex-shrink-0 overflow-hidden bg-white" style={{ width: '100vw' }}>
+          <div className="h-full w-full">
+            <CenterPanel onReferenceClick={handleReferenceClick} />
+          </div>
+        </div>
+        
+        {/* Progress Panel */}
+        <div className="h-full flex-shrink-0 overflow-hidden bg-white" style={{ width: '100vw' }}>
+          <div className="h-full w-full">
+            <RightPanel onResize={handleRightPanelResize} />
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // 渲染面板指示器
@@ -301,9 +378,13 @@ const ResponsiveMainLayout: React.FC = () => {
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
+        style={{ 
+          touchAction: 'pan-y', // 只允許垂直滾動，防止瀏覽器默認的水平滑動行為
+          overscrollBehavior: 'none' // 防止過度滾動
+        }}
       >
-        <div className="h-full bg-white transition-transform duration-300">
-          {renderMobilePanel()}
+        <div className="h-full bg-white overflow-hidden relative">
+          {renderMobilePanelContainer()}
         </div>
         
         {/* 面板指示器和滑動提示 */}

@@ -9,6 +9,21 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden; /* 防止水平滾動 */
+}
+
+/* 移動版防跑版樣式 */
+@media (max-width: 640px) {
+  html, body {
+    overflow-x: hidden;
+    position: relative;
+    width: 100%;
+  }
+  
+  /* 確保所有容器不會超出螢幕寬度 */
+  * {
+    max-width: 100vw;
+  }
 }
 
 code {
