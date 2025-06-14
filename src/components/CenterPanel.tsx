@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import ChatMessageList from './chat/ChatMessageList/ChatMessageList';
 import ChatInput from './chat/ChatInput/ChatInput';
 import { ProcessedSentence } from '../types/file';
@@ -17,89 +17,145 @@ const CenterPanel: React.FC<CenterPanelProps> = ({ onReferenceClick }) => {
   const [hasCompletedPapers, setHasCompletedPapers] = useState(false);
   const [isCheckingPapers, setIsCheckingPapers] = useState(true);
   const [sentencesCount, setSentencesCount] = useState(0);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastCheckRef = useRef<number>(0);
   
-  // 檢查是否有已完成處理的論文
-  const checkCompletedPapers = async () => {
+  // 檢查是否有已完成處理的論文和句子
+  const checkCompletedPapers = useCallback(async (forceUpdate = false) => {
+    // 避免頻繁檢查，至少間隔2秒
+    const now = Date.now();
+    if (!forceUpdate && now - lastCheckRef.current < 2000) {
+      return;
+    }
+    lastCheckRef.current = now;
+    
     setIsCheckingPapers(true);
     try {
-      console.log('🔍 檢查已完成的論文...');
-      const hasCompleted = await paperService.hasAnyCompletedPapers();
-      console.log('📊 hasAnyCompletedPapers:', hasCompleted);
-      setHasCompletedPapers(hasCompleted);
+      console.log('🔍 檢查已完成的論文和句子...');
       
-      // 如果有已完成的論文，嘗試同步句子資料
-      if (hasCompleted) {
-        console.log('📥 獲取句子資料...');
-        const sentencesData = await paperService.getAllSelectedPapersSentences();
-        console.log('📝 句子資料:', {
-          totalSentences: sentencesData.totalSentences,
-          totalPapers: sentencesData.totalPapers,
-          papers: sentencesData.papers
+      // 同時檢查完成的論文和句子資料
+      const [hasCompleted, sentencesData] = await Promise.all([
+        paperService.hasAnyCompletedPapers(),
+        paperService.getAllSelectedPapersSentences()
+      ]);
+      
+      console.log('📊 檢查結果:', {
+        hasCompleted,
+        totalSentences: sentencesData.totalSentences,
+        totalPapers: sentencesData.totalPapers
+      });
+      
+      // 更新狀態
+      const newHasCompleted = hasCompleted || sentencesData.totalSentences > 0;
+      const newSentencesCount = sentencesData.totalSentences;
+      
+      // 只有在狀態真正改變時才更新，避免不必要的重渲染
+      if (newHasCompleted !== hasCompletedPapers || newSentencesCount !== sentencesCount) {
+        setHasCompletedPapers(newHasCompleted);
+        setSentencesCount(newSentencesCount);
+        
+        console.log('✅ 狀態更新:', {
+          wasEnabled: hasCompletedPapers && sentencesCount > 0,
+          nowEnabled: newHasCompleted && newSentencesCount > 0,
+          sentencesChange: newSentencesCount - sentencesCount
         });
-        setSentencesCount(sentencesData.totalSentences);
-      } else {
-        // 如果檢查結果顯示沒有已完成論文，但我們可以直接嘗試獲取句子
-        console.log('⚠️ 沒有檢測到已完成論文，嘗試直接獲取句子資料...');
-        try {
-          const sentencesData = await paperService.getAllSelectedPapersSentences();
-          if (sentencesData.totalSentences > 0) {
-            console.log('✅ 發現句子資料，覆蓋檢查結果:', sentencesData.totalSentences);
-            setHasCompletedPapers(true);
-            setSentencesCount(sentencesData.totalSentences);
-          } else {
-            setSentencesCount(0);
-          }
-        } catch (fallbackError) {
-          console.error('❌ 備援檢查也失敗:', fallbackError);
-          setSentencesCount(0);
+        
+        // 如果聊天從不可用變為可用，發送通知
+        if (!hasCompletedPapers && newHasCompleted && newSentencesCount > 0) {
+          console.log('🎉 聊天功能已啟用！');
         }
       }
+      
     } catch (error) {
       console.error('❌ 檢查已完成論文時出錯:', error);
       // 降級到檢查本地句子資料
-      setHasCompletedPapers(sentences.length > 0);
-      setSentencesCount(sentences.length);
+      const localSentenceCount = sentences.length;
+      if (localSentenceCount !== sentencesCount) {
+        setHasCompletedPapers(localSentenceCount > 0);
+        setSentencesCount(localSentenceCount);
+      }
     } finally {
       setIsCheckingPapers(false);
     }
-  };
+  }, [hasCompletedPapers, sentencesCount, sentences.length]);
 
-  // 組件掛載時檢查狀態
-  useEffect(() => {
-    checkCompletedPapers();
+  // 啟動定期檢查
+  const startPeriodicCheck = useCallback(() => {
+    // 清除舊的定時器
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    
+    // 設置新的定時器，每5秒檢查一次
+    intervalRef.current = setInterval(() => {
+      checkCompletedPapers();
+    }, 5000);
+    
+    console.log('🔄 啟動定期檢查 (每5秒)');
+  }, [checkCompletedPapers]);
+
+  // 停止定期檢查
+  const stopPeriodicCheck = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+      console.log('⏹️ 停止定期檢查');
+    }
   }, []);
 
-  // 監聽本地句子變化作為備援
+  // 組件掛載時初始化
   useEffect(() => {
-    if (!isCheckingPapers && !hasCompletedPapers && sentences.length > 0) {
-      setHasCompletedPapers(true);
+    checkCompletedPapers(true);
+    startPeriodicCheck();
+    
+    return () => {
+      stopPeriodicCheck();
+    };
+  }, [checkCompletedPapers, startPeriodicCheck, stopPeriodicCheck]);
+
+  // 監聽本地句子變化作為即時更新
+  useEffect(() => {
+    if (sentences.length > 0 && sentences.length !== sentencesCount) {
+      console.log('📝 本地句子資料變化:', sentences.length);
       setSentencesCount(sentences.length);
+      setHasCompletedPapers(true);
     }
-  }, [sentences, isCheckingPapers, hasCompletedPapers]);
+  }, [sentences.length, sentencesCount]);
 
   // 監聽論文資料同步完成事件
   useEffect(() => {
     const handlePaperDataSynced = (event: CustomEvent) => {
-      const { paperId, sentencesCount } = event.detail;
-      console.log(`Paper data synced for ${paperId}: ${sentencesCount} sentences`);
+      const { paperId, sentencesCount: newCount } = event.detail;
+      console.log(`📥 Paper data synced for ${paperId}: ${newCount} sentences`);
       
-      // 重新檢查論文狀態
-      checkCompletedPapers();
+      // 立即檢查更新
+      checkCompletedPapers(true);
+    };
+
+    // 監聽窗口焦點事件，當用戶回到頁面時檢查更新
+    const handleFocus = () => {
+      console.log('👁️ 頁面獲得焦點，檢查更新');
+      checkCompletedPapers(true);
     };
 
     window.addEventListener('paperDataSynced', handlePaperDataSynced as EventListener);
+    window.addEventListener('focus', handleFocus);
     
     return () => {
       window.removeEventListener('paperDataSynced', handlePaperDataSynced as EventListener);
+      window.removeEventListener('focus', handleFocus);
     };
-  }, []);
+  }, [checkCompletedPapers]);
 
+  // 手動刷新處理函數
   const handleRefresh = async () => {
+    console.log('🔄 手動刷新');
+    
     // 清除所有聊天記錄（從 localStorage 和界面上）
     clearAllChats();
     
     // 重新檢查論文狀態
-    await checkCompletedPapers();
+    await checkCompletedPapers(true);
   };
 
   // 決定是否啟用聊天輸入
@@ -119,19 +175,33 @@ const CenterPanel: React.FC<CenterPanelProps> = ({ onReferenceClick }) => {
     return `輸入你的查詢... (已處理 ${sentencesCount} 個句子)`;
   };
 
+  // 生成狀態顯示文字
+  const getStatusText = () => {
+    if (isCheckingPapers) {
+      return "檢查中...";
+    }
+    if (!hasCompletedPapers) {
+      return "等待論文處理完成";
+    }
+    if (sentencesCount === 0) {
+      return "論文處理中...";
+    }
+    return `已就緒 - ${sentencesCount} 個句子可用於查詢`;
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 border-b bg-white flex justify-between items-center">
         <div>
           <h2 className="text-lg font-medium text-gray-900">定義查詢助手</h2>
-          {!isCheckingPapers && (
-            <p className="text-sm text-gray-500">
-              {hasCompletedPapers 
-                ? `已就緒 - ${sentencesCount} 個句子可用於查詢`
-                : "等待論文處理完成"
-              }
-            </p>
-          )}
+          <p className="text-sm text-gray-500">
+            {getStatusText()}
+            {isChatEnabled && (
+              <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                就緒
+              </span>
+            )}
+          </p>
         </div>
         <button 
           onClick={handleRefresh}
