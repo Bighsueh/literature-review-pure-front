@@ -11,7 +11,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 import os
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, update
 from sqlalchemy.sql import func
 
 from ..core.config import settings
@@ -183,8 +183,30 @@ class ProcessingService:
                 
                 # 重新獲取論文狀態以確保更新
                 await session.commit()
+                
+                # 手動確保 sentences_processed 狀態正確設置
+                await db_service.update_paper_status(
+                    session, 
+                    file_id, 
+                    "processing", 
+                    error_message=None
+                )
+                
+                # 額外檢查：確保 sentences_processed 標記為 True
+                check_result = await session.execute(
+                    select(Paper.sentences_processed).where(Paper.id == file_id)
+                )
+                is_sentences_processed = check_result.scalar()
+                
+                if not is_sentences_processed:
+                    logger.warning(f"sentences_processed 狀態未正確設置，手動修正: {file_id}")
+                    await session.execute(
+                        update(Paper).where(Paper.id == file_id).values(sentences_processed=True)
+                    )
+                    await session.commit()
+                
                 paper = await db_service.get_paper_by_id(session, file_id)
-                logger.info(f"[進度] 章節與句子提取完成並已儲存: {file_id}")
+                logger.info(f"[進度] 章節與句子提取完成並已儲存: {file_id} - sentences_processed: {paper.sentences_processed}")
             else:
                 # 步驟 2.5: 頁碼更新（可恢復流程中的額外步驟）
                 await queue_service.update_progress(task.task_id, step_name="頁碼資訊更新")
@@ -953,9 +975,12 @@ class ProcessingService:
             
             # 6. 檢查處理狀態標記
             if not paper.grobid_processed:
+                logger.error(f"驗證失敗 - Grobid 處理狀態: {paper.grobid_processed}")
                 return {"success": False, "error": "Grobid 處理狀態未標記為完成"}
             
             if not paper.sentences_processed:
+                logger.error(f"驗證失敗 - 句子處理狀態: {paper.sentences_processed}")
+                logger.error(f"論文詳細狀態: grobid_processed={paper.grobid_processed}, sentences_processed={paper.sentences_processed}, od_cd_processed={paper.od_cd_processed}, processing_status={paper.processing_status}")
                 return {"success": False, "error": "句子處理狀態未標記為完成"}
             
             # 7. 檢查章節內容質量
