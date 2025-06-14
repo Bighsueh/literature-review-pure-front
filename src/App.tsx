@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import MainLayout from './components/MainLayout';
+import ResponsiveMainLayout from './components/ResponsiveMainLayout';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import './index.css';
 
@@ -20,7 +20,7 @@ function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <div className="app">
-          <MainLayout />
+          <ResponsiveMainLayout />
         </div>
       </QueryClientProvider>
     </ErrorBoundary>

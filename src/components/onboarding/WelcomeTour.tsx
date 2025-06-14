@@ -4,18 +4,21 @@ import 'driver.js/dist/driver.css';
 import '../../styles/driver-theme.css';
 import { useFileStore } from '../../stores/fileStore';
 import { useChatStore } from '../../stores/chatStore';
+import { useResponsive } from '../../hooks/useResponsive';
 import WelcomeAnimation from './WelcomeAnimation';
 
 interface WelcomeTourProps {
   onTourComplete?: () => void;
+  activePanel?: string;
 }
 
-const WelcomeTour: React.FC<WelcomeTourProps> = ({ onTourComplete }) => {
+const WelcomeTour: React.FC<WelcomeTourProps> = ({ onTourComplete, activePanel }) => {
   const [tourInstance, setTourInstance] = useState<ReturnType<typeof driver> | null>(null);
   const [showWelcome, setShowWelcome] = useState(false);
   const [showAnimation, setShowAnimation] = useState(false);
   const { files } = useFileStore();
   const { conversations } = useChatStore();
+  const { isMobile } = useResponsive();
 
   useEffect(() => {
     // 檢查是否是第一次訪問
@@ -208,7 +211,9 @@ const WelcomeTour: React.FC<WelcomeTourProps> = ({ onTourComplete }) => {
       )}
       
       {/* Tour Guide Button */}
-      <div className="fixed bottom-4 right-4 z-50">
+      <div className={`fixed right-4 z-50 ${
+        isMobile && activePanel === 'chat' ? 'bottom-28' : 'bottom-4'
+      }`}>
         <button
           onClick={restartTour}
           className="bg-blue-500 hover:bg-blue-600 text-white p-3 rounded-full shadow-lg transition-all duration-200 hover:scale-105"
