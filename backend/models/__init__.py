@@ -3,38 +3,22 @@
 包含所有SQLAlchemy ORM模型和Pydantic schemas
 """
 
-from .paper import (
-    Paper, PaperSection, Sentence, PaperSelection, ProcessingQueue, SystemSettings,
-    Base,
-    PaperCreate, PaperUpdate, PaperResponse,
-    SectionCreate, SectionResponse,
-    SentenceCreate, SentenceResponse,
-    ProcessingQueueCreate, ProcessingQueueUpdate, ProcessingQueueResponse,
-    PaperSelectionUpdate, PaperSelectionResponse,
-    PaperWithSectionsResponse, SectionSummary, PaperSectionSummary,
-    QueryRequest, QueryResult,
-    ProcessingStatusEnum, DefiningTypeEnum
-)
+from .paper import *
+from .user import User, Workspace, UserCreate, UserUpdate, UserResponse, WorkspaceCreate, WorkspaceUpdate, WorkspaceResponse, UserWithWorkspacesResponse
+from .chat import ChatHistory, ChatHistoryCreate, ChatHistoryResponse, ChatSessionResponse
 
 __all__ = [
-    # SQLAlchemy ORM Models
+    # Paper related models
     "Paper", "PaperSection", "Sentence", "PaperSelection", "ProcessingQueue", "SystemSettings",
-    "Base",
+    "PaperCreate", "PaperUpdate", "PaperResponse", "SectionCreate", "SectionResponse",
+    "SentenceCreate", "SentenceResponse", "ProcessingQueueCreate", "ProcessingQueueUpdate", 
+    "ProcessingQueueResponse", "PaperSelectionUpdate", "PaperSelectionResponse",
+    "PaperWithSectionsResponse", "QueryRequest", "QueryResult", "UnifiedQueryRequest",
     
-    # Pydantic Schemas - Create
-    "PaperCreate", "SectionCreate", "SentenceCreate", "ProcessingQueueCreate",
+    # User & Workspace models
+    "User", "Workspace", "UserCreate", "UserUpdate", "UserResponse", 
+    "WorkspaceCreate", "WorkspaceUpdate", "WorkspaceResponse", "UserWithWorkspacesResponse",
     
-    # Pydantic Schemas - Update
-    "PaperUpdate", "ProcessingQueueUpdate", "PaperSelectionUpdate",
-    
-    # Pydantic Schemas - Response
-    "PaperResponse", "SectionResponse", "SentenceResponse", 
-    "ProcessingQueueResponse", "PaperSelectionResponse",
-    "PaperWithSectionsResponse", "SectionSummary", "PaperSectionSummary",
-    
-    # Query Schemas
-    "QueryRequest", "QueryResult",
-    
-    # Enums
-    "ProcessingStatusEnum", "DefiningTypeEnum"
+    # Chat models
+    "ChatHistory", "ChatHistoryCreate", "ChatHistoryResponse", "ChatSessionResponse",
 ] 

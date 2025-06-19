@@ -1,0 +1,8 @@
+資料庫備份統計資訊
+==================
+備份時間: Thu Jun 19 22:20:13 CST 2025
+資料庫名稱: paper_analysis
+備份檔案: paper_analysis_backup_20250619_222013.sql
+結構檔案: paper_analysis_schema_20250619_222013.sql
+
+資料表統計:
