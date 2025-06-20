@@ -37,6 +37,16 @@ services:
       - GROBID_URL=${GROBID_URL}
       - N8N_BASE_URL=${N8N_BASE_URL}
       - SPLIT_SENTENCES_URL=${SPLIT_SENTENCES_URL}
+      # Google OAuth 設定
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - FRONTEND_URL=${FRONTEND_URL}
+      # JWT 和安全設定
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - JWT_ALGORITHM=${JWT_ALGORITHM}
+      - JWT_EXPIRE_HOURS=${JWT_EXPIRE_HOURS}
+      - SECRET_KEY=${SECRET_KEY}
     volumes:
       - ./backend:/app/backend
       - ./temp_files:/app/temp_files
