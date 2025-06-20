@@ -42,6 +42,12 @@ from .api.papers import router as papers_router
 from .api.processing import router as processing_router
 from .api.health import router as health_router
 from .api.debug import router as debug_router
+from .api.auth import router as auth_router
+from .api.workspaces import router as workspaces_router
+from .api.legacy import router as legacy_router
+from .api.chats import router as chats_router
+from .api.workspace_files import router as workspace_files_router
+from .api.workspace_query import router as workspace_query_router
 
 
 # 設置日誌
@@ -119,11 +125,26 @@ app = FastAPI(
 # CORS中間件設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允許所有來源
+    allow_origins=[
+        # 開發環境
+        "http://localhost:5173",
+        "http://localhost:3000", 
+        "http://127.0.0.1:5173",
+        # 生產環境
+        "https://chat.hsueh.tw",
+        "https://backend.hsueh.tw",
+        # 動態設定（從環境變數）
+        settings.frontend_url if hasattr(settings, 'frontend_url') else "http://localhost:5173"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["X-Request-ID", "X-Process-Time"],  # 暴露自定義標頭
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type", 
+        "X-Requested-With",
+        "X-Request-ID"
+    ],
+    expose_headers=["X-Request-ID", "X-Process-Time"],
 )
 
 
@@ -251,11 +272,17 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 
 # 包含API路由
+app.include_router(auth_router, tags=["authentication"])
+app.include_router(workspaces_router, tags=["workspaces"])
+app.include_router(chats_router, tags=["chats"])
+app.include_router(legacy_router, tags=["legacy-data"])
 app.include_router(files_router, prefix="/api", tags=["upload"])
 app.include_router(papers_router, prefix="/api", tags=["papers"])
 app.include_router(processing_router, prefix="/api", tags=["processing"])
 app.include_router(health_router, tags=["健康檢查"])
 app.include_router(debug_router, prefix="/api", tags=["debug"])
+app.include_router(workspace_files_router, tags=["workspace-files"])
+app.include_router(workspace_query_router, tags=["workspace-query"])
 
 
 @app.get("/")

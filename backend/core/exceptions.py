@@ -9,6 +9,22 @@ from enum import Enum
 import logging
 import traceback
 from datetime import datetime
+from .error_handling import (
+    APIError,
+    AuthenticationError,
+    AuthorizationError,
+    ResourceNotFoundError,
+    ValidationError,
+    FileProcessingError,
+    DatabaseError,
+    ErrorCodes,
+    ErrorResponse,
+    create_error_response,
+    retry_on_failure,
+    with_circuit_breaker,
+    database_circuit_breaker,
+    external_api_circuit_breaker
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,244 +48,128 @@ class ErrorSeverity(Enum):
     HIGH = "high"
     CRITICAL = "critical"
 
-class BaseAPIException(HTTPException):
-    """基礎 API 異常類別"""
-    
-    def __init__(
-        self,
-        status_code: int,
-        message: str,
-        error_type: ErrorType = ErrorType.INTERNAL_SERVER,
-        severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-        details: Optional[Dict[str, Any]] = None,
-        retryable: bool = False
-    ):
+# 重新導出以保持向後兼容
+BaseAPIException = APIError
+
+# 保持現有的異常類以支持遺留代碼
+class BaseAPIException(APIError):
+    """基礎API異常類 - 向後兼容"""
+    def __init__(self, detail: str, status_code: int = 500, error_type: str = None):
+        super().__init__(
+            error_code=error_type or ErrorCodes.INTERNAL_SERVER_ERROR,
+            message=detail,
+            status_code=status_code
+        )
+        self.detail = detail
         self.error_type = error_type
-        self.severity = severity
-        self.retryable = retryable
-        self.timestamp = datetime.utcnow()
-        self.details = details or {}
-        
-        super().__init__(
-            status_code=status_code,
-            detail={
-                "message": message,
-                "error_type": error_type.value,
-                "severity": severity.value,
-                "retryable": retryable,
-                "timestamp": self.timestamp.isoformat(),
-                "details": self.details
-            }
-        )
 
-class ValidationException(Exception):
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
+class ValidationException(ValidationError):
+    """驗證異常 - 向後兼容"""
+    pass
 
-class AuthenticationException(BaseAPIException):
-    """身份驗證錯誤"""
-    
-    def __init__(self, message: str = "身份驗證失敗"):
+class DatabaseException(DatabaseError):
+    """數據庫異常 - 向後兼容"""
+    pass
+
+class FileProcessingException(FileProcessingError):
+    """檔案處理異常 - 向後兼容"""
+    pass
+
+class ExternalAPIException(APIError):
+    """外部API異常"""
+    def __init__(self, message: str = "External API error", details=None):
         super().__init__(
-            status_code=401,
+            error_code=ErrorCodes.EXTERNAL_SERVICE_ERROR,
             message=message,
-            error_type=ErrorType.AUTHENTICATION,
-            severity=ErrorSeverity.HIGH,
-            retryable=False
+            status_code=503,
+            details=details
         )
 
-class AuthorizationException(BaseAPIException):
-    """授權錯誤"""
-    
-    def __init__(self, message: str = "沒有權限執行此操作"):
+class InternalServerException(APIError):
+    """內部伺服器異常"""
+    def __init__(self, message: str = "Internal server error", details=None):
         super().__init__(
-            status_code=403,
+            error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
             message=message,
-            error_type=ErrorType.AUTHORIZATION,
-            severity=ErrorSeverity.HIGH,
-            retryable=False
-        )
-
-class NotFoundException(BaseAPIException):
-    """資源未找到錯誤"""
-    
-    def __init__(self, message: str, resource_type: Optional[str] = None):
-        details = {}
-        if resource_type:
-            details["resource_type"] = resource_type
-            
-        super().__init__(
-            status_code=404,
-            message=message,
-            error_type=ErrorType.NOT_FOUND,
-            severity=ErrorSeverity.LOW,
-            details=details,
-            retryable=False
-        )
-
-class ConflictException(BaseAPIException):
-    """衝突錯誤"""
-    
-    def __init__(self, message: str, details: Optional[Dict] = None):
-        super().__init__(
-            status_code=409,
-            message=message,
-            error_type=ErrorType.CONFLICT,
-            severity=ErrorSeverity.MEDIUM,
-            details=details,
-            retryable=False
-        )
-
-class RateLimitException(BaseAPIException):
-    """速率限制錯誤"""
-    
-    def __init__(self, message: str = "請求過於頻繁，請稍後重試"):
-        super().__init__(
-            status_code=429,
-            message=message,
-            error_type=ErrorType.RATE_LIMIT,
-            severity=ErrorSeverity.MEDIUM,
-            retryable=True
-        )
-
-class ExternalAPIException(BaseAPIException):
-    """外部 API 錯誤"""
-    
-    def __init__(self, message: str, service_name: Optional[str] = None, details: Optional[Dict] = None):
-        error_details = details or {}
-        if service_name:
-            error_details["service"] = service_name
-            
-        super().__init__(
-            status_code=502,
-            message=message,
-            error_type=ErrorType.EXTERNAL_API,
-            severity=ErrorSeverity.HIGH,
-            details=error_details,
-            retryable=True
-        )
-
-class DatabaseException(BaseAPIException):
-    """資料庫錯誤"""
-    
-    def __init__(self, message: str = "資料庫操作失敗", details: Optional[Dict] = None):
-        super().__init__(
             status_code=500,
-            message=message,
-            error_type=ErrorType.DATABASE,
-            severity=ErrorSeverity.CRITICAL,
-            details=details,
-            retryable=True
+            details=details
         )
 
-class FileProcessingException(BaseAPIException):
-    """檔案處理錯誤"""
-    
-    def __init__(self, message: str, file_name: Optional[str] = None, details: Optional[Dict] = None):
-        error_details = details or {}
-        if file_name:
-            error_details["file_name"] = file_name
-            
+# 新增查詢處理相關的異常類別
+class QueryProcessingError(APIError):
+    """查詢處理異常"""
+    def __init__(self, message: str = "Query processing failed", details=None):
         super().__init__(
-            status_code=422,
+            error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
             message=message,
-            error_type=ErrorType.FILE_PROCESSING,
-            severity=ErrorSeverity.MEDIUM,
-            details=error_details,
-            retryable=True
-        )
-
-class InternalServerException(BaseAPIException):
-    """內部伺服器錯誤"""
-    
-    def __init__(self, message: str = "內部伺服器錯誤", details: Optional[Dict] = None):
-        super().__init__(
             status_code=500,
-            message=message,
-            error_type=ErrorType.INTERNAL_SERVER,
-            severity=ErrorSeverity.CRITICAL,
-            details=details,
-            retryable=False
+            details=details
         )
 
-class QueryProcessingError(BaseAPIException):
-    """查詢處理錯誤"""
-    
-    def __init__(self, message: str, details: Optional[Dict] = None):
-        super().__init__(
-            status_code=422,
-            message=message,
-            error_type=ErrorType.FILE_PROCESSING,
-            severity=ErrorSeverity.MEDIUM,
-            details=details,
-            retryable=True
-        )
+class DataValidationError(ValidationError):
+    """資料驗證異常"""
+    def __init__(self, message: str = "Data validation failed", field: str = "", details=None):
+        super().__init__(message, field, details)
 
-class DataValidationError(BaseAPIException):
-    """資料驗證錯誤"""
-    
-    def __init__(self, message: str, details: Optional[Dict] = None):
-        super().__init__(
-            status_code=400,
-            message=message,
-            error_type=ErrorType.VALIDATION,
-            severity=ErrorSeverity.MEDIUM,
-            details=details,
-            retryable=False
-        )
-
+# 錯誤處理器
 class ErrorHandler:
-    """錯誤處理器"""
-    
+    """錯誤處理器類 - 向後兼容"""
     @staticmethod
-    def log_error(exception: Exception, context: Optional[Dict[str, Any]] = None):
-        """記錄錯誤"""
-        error_info = {
-            "error_type": type(exception).__name__,
-            "message": str(exception),
-            "traceback": traceback.format_exc(),
-            "context": context or {}
-        }
-        
-        if isinstance(exception, BaseAPIException):
-            error_info.update({
-                "api_error_type": exception.error_type.value,
-                "severity": exception.severity.value,
-                "retryable": exception.retryable,
-                "details": exception.details
-            })
-            
-            # 根據嚴重程度選擇日誌級別
-            if exception.severity == ErrorSeverity.CRITICAL:
-                logger.critical("Critical error occurred", extra=error_info)
-            elif exception.severity == ErrorSeverity.HIGH:
-                logger.error("High severity error occurred", extra=error_info)
-            elif exception.severity == ErrorSeverity.MEDIUM:
-                logger.warning("Medium severity error occurred", extra=error_info)
-            else:
-                logger.info("Low severity error occurred", extra=error_info)
-        else:
-            logger.error("Unhandled exception occurred", extra=error_info)
-    
-    @staticmethod
-    def format_error_response(exception: Exception) -> Dict[str, Any]:
-        """格式化錯誤回應"""
-        if isinstance(exception, BaseAPIException):
-            return exception.detail
-        
-        # 對於未處理的異常，返回通用錯誤訊息
-        return {
-            "message": "內部伺服器錯誤",
-            "error_type": ErrorType.INTERNAL_SERVER.value,
-            "severity": ErrorSeverity.CRITICAL.value,
-            "retryable": False,
-            "timestamp": datetime.utcnow().isoformat(),
-            "details": {}
-        }
+    def log_error(error, context=None):
+        from .logging import get_logger
+        logger = get_logger("error_handler")
+        logger.error(f"Error: {error}", extra=context or {})
 
-# 錯誤處理器實例
+class HTTPExceptionHandler:
+    """HTTP異常處理器 - 向後兼容"""
+    pass
+
+# 實例化錯誤處理器
 error_handler = ErrorHandler()
+
+# 便利函數以保持向後兼容
+def handle_validation_error(message: str, field: str = ""):
+    """處理驗證錯誤"""
+    return ValidationError(message, field)
+
+def handle_not_found_error(message: str):
+    """處理資源不存在錯誤"""
+    return ResourceNotFoundError("Resource", message)
+
+def handle_internal_error(message: str):
+    """處理內部錯誤"""
+    return InternalServerException(message)
+
+# 導出所有需要的符號
+__all__ = [
+    "APIError",
+    "AuthenticationError", 
+    "AuthorizationError",
+    "ResourceNotFoundError",
+    "ValidationError",
+    "FileProcessingError",
+    "DatabaseError",
+    "ExternalAPIException",
+    "InternalServerException",
+    "QueryProcessingError",
+    "DataValidationError",
+    "BaseAPIException",
+    "ValidationException",
+    "DatabaseException", 
+    "FileProcessingException",
+    "ErrorCodes",
+    "ErrorResponse",
+    "create_error_response",
+    "retry_on_failure",
+    "with_circuit_breaker",
+    "database_circuit_breaker",
+    "external_api_circuit_breaker",
+    "error_handler",
+    "HTTPExceptionHandler",
+    "handle_validation_error",
+    "handle_not_found_error",
+    "handle_internal_error"
+]
 
 # HTTP例外處理器
 class HTTPExceptionHandler:

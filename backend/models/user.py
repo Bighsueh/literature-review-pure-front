@@ -1,13 +1,12 @@
 from sqlalchemy import Column, String, ForeignKey, TIMESTAMP, UUID
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, validator
+from typing import Optional, List, Union
 from datetime import datetime
 import uuid
 
-Base = declarative_base()
+from .base import Base
 
 # ===== SQLAlchemy ORM Models =====
 
@@ -70,6 +69,13 @@ class UserResponse(UserBase):
     created_at: datetime
     updated_at: datetime
     
+    @validator('id', pre=True)
+    def convert_uuid_to_string(cls, v):
+        """將 UUID 轉換為字串"""
+        if isinstance(v, uuid.UUID):
+            return str(v)
+        return v
+    
     class Config:
         from_attributes = True
 
@@ -79,7 +85,7 @@ class WorkspaceBase(BaseModel):
 
 
 class WorkspaceCreate(WorkspaceBase):
-    user_id: str
+    pass  # 移除 user_id，從認證用戶中自動獲取
 
 
 class WorkspaceUpdate(BaseModel):
@@ -91,6 +97,13 @@ class WorkspaceResponse(WorkspaceBase):
     user_id: str
     created_at: datetime
     updated_at: datetime
+    
+    @validator('id', 'user_id', pre=True)
+    def convert_uuid_to_string(cls, v):
+        """將 UUID 轉換為字串"""
+        if isinstance(v, uuid.UUID):
+            return str(v)
+        return v
     
     class Config:
         from_attributes = True

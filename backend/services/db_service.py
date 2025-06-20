@@ -16,6 +16,7 @@ from ..models.paper import (
     PaperSectionSummary, SectionSummary
 )
 from ..core.logging import get_logger
+from ..core.pagination import paginate_query, PaginatedResponse
 
 logger = get_logger(__name__)
 
@@ -35,9 +36,13 @@ class DatabaseService:
     
     # ===== Paper Management =====
     
-    async def create_paper(self, db: AsyncSession, paper_data: PaperCreate) -> str:
+    async def create_paper(self, db: AsyncSession, paper_data: PaperCreate, workspace_id: Optional[UUID] = None) -> str:
         """建立新論文記錄"""
-        paper = Paper(**paper_data.dict())
+        paper_dict = paper_data.dict()
+        if workspace_id:
+            paper_dict['workspace_id'] = workspace_id
+        
+        paper = Paper(**paper_dict)
         db.add(paper)
         await db.commit()
         await db.refresh(paper)
@@ -897,6 +902,238 @@ class DatabaseService:
         )
         result = await db.execute(query)
         return result.rowcount > 0
+
+    # ===== 工作區化方法 =====
+    
+    async def get_paper_by_hash_and_workspace(self, db: AsyncSession, file_hash: str, workspace_id: UUID) -> Optional[Paper]:
+        """根據檔案雜湊值和工作區取得論文"""
+        query = select(Paper).where(
+            and_(Paper.file_hash == file_hash, Paper.workspace_id == workspace_id)
+        )
+        result = await db.execute(query)
+        return result.scalar_one_or_none()
+    
+    async def get_paper_by_id_and_workspace(self, db: AsyncSession, paper_id: str, workspace_id: UUID) -> Optional[Paper]:
+        """根據ID和工作區取得論文"""
+        query = select(Paper).where(
+            and_(Paper.id == paper_id, Paper.workspace_id == workspace_id)
+        )
+        result = await db.execute(query)
+        return result.scalar_one_or_none()
+    
+    async def get_papers_by_workspace(
+        self, 
+        db: AsyncSession, 
+        workspace_id: UUID,
+        pagination: Optional[Any] = None,  # PaginationParams
+        selected_only: bool = False
+    ) -> Any:  # PaginatedResponse[PaperResponse]
+        """取得工作區內的論文列表，支援分頁"""
+        # 基本查詢
+        query = (
+            select(
+                Paper, 
+                PaperSelection.is_selected,
+                func.count(func.distinct(PaperSection.id)).label('section_count'),
+                func.count(func.distinct(Sentence.id)).label('sentence_count')
+            )
+            .outerjoin(PaperSelection, Paper.id == PaperSelection.paper_id)
+            .outerjoin(PaperSection, Paper.id == PaperSection.paper_id)
+            .outerjoin(Sentence, Paper.id == Sentence.paper_id)
+            .where(Paper.workspace_id == workspace_id)
+            .group_by(Paper.id, PaperSelection.is_selected)
+            .order_by(desc(Paper.created_at))
+        )
+        
+        # 如果只要已選取的檔案
+        if selected_only:
+            query = query.where(PaperSelection.is_selected == True)
+        
+        if pagination:
+            # 使用分頁
+            result = await paginate_query(db, query, pagination)
+            
+            # 轉換資料格式
+            items = []
+            for paper, is_selected, section_count, sentence_count in result.items:
+                paper_dict = {
+                    "id": str(paper.id),
+                    "title": paper.original_filename or paper.file_name,
+                    "file_path": paper.file_name,
+                    "file_hash": paper.file_hash,
+                    "upload_time": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
+                    "processing_status": paper.processing_status,
+                    "selected": is_selected if is_selected is not None else False,
+                    "authors": [],
+                    "section_count": section_count or 0,
+                    "sentence_count": sentence_count or 0,
+                    "original_filename": paper.original_filename,
+                    "file_name": paper.file_name,
+                    "workspace_id": str(paper.workspace_id) if paper.workspace_id else None,
+                    "created_at": paper.created_at.isoformat() if paper.created_at else datetime.now().isoformat(),
+                }
+                items.append(paper_dict)
+            
+            return PaginatedResponse(
+                items=items,
+                total=result.total,
+                page=result.page,
+                size=result.size,
+                pages=result.pages
+            )
+        else:
+            # 不使用分頁
+            result = await db.execute(query)
+            papers = []
+            
+            for paper, is_selected, section_count, sentence_count in result:
+                paper_dict = {
+                    "id": str(paper.id),
+                    "title": paper.original_filename or paper.file_name,
+                    "file_path": paper.file_name,
+                    "file_hash": paper.file_hash,
+                    "upload_time": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
+                    "processing_status": paper.processing_status,
+                    "selected": is_selected if is_selected is not None else False,
+                    "authors": [],
+                    "section_count": section_count or 0,
+                    "sentence_count": sentence_count or 0,
+                    "original_filename": paper.original_filename,
+                    "file_name": paper.file_name,
+                    "workspace_id": str(paper.workspace_id) if paper.workspace_id else None,
+                    "created_at": paper.created_at.isoformat() if paper.created_at else datetime.now().isoformat(),
+                }
+                papers.append(paper_dict)
+            
+            return papers
+    
+    async def get_selected_papers_by_workspace(self, db: AsyncSession, workspace_id: UUID) -> List[Paper]:
+        """取得工作區內已選取的論文"""
+        query = (
+            select(Paper)
+            .join(PaperSelection, Paper.id == PaperSelection.paper_id)
+            .where(
+                and_(
+                    Paper.workspace_id == workspace_id,
+                    PaperSelection.is_selected == True
+                )
+            )
+            .order_by(desc(Paper.created_at))
+        )
+        result = await db.execute(query)
+        return result.scalars().all()
+    
+    async def select_all_papers_in_workspace(self, db: AsyncSession, workspace_id: UUID) -> int:
+        """選取工作區內所有論文"""
+        # 取得工作區內所有論文的ID
+        paper_query = select(Paper.id).where(Paper.workspace_id == workspace_id)
+        result = await db.execute(paper_query)
+        paper_ids = [str(row[0]) for row in result]
+        
+        if not paper_ids:
+            return 0
+        
+        # 批次設定選取狀態
+        for paper_id in paper_ids:
+            await self.set_paper_selection(db, paper_id, True)
+        
+        return len(paper_ids)
+    
+    async def deselect_all_papers_in_workspace(self, db: AsyncSession, workspace_id: UUID) -> int:
+        """取消選取工作區內所有論文"""
+        # 取得工作區內所有論文的ID
+        paper_query = select(Paper.id).where(Paper.workspace_id == workspace_id)
+        result = await db.execute(paper_query)
+        paper_ids = [str(row[0]) for row in result]
+        
+        if not paper_ids:
+            return 0
+        
+        # 批次設定選取狀態
+        for paper_id in paper_ids:
+            await self.set_paper_selection(db, paper_id, False)
+        
+        return len(paper_ids)
+    
+    async def batch_select_papers_in_workspace(self, db: AsyncSession, file_ids: List[str], workspace_id: UUID) -> int:
+        """批次選取工作區內指定論文"""
+        # 驗證所有檔案都屬於指定工作區
+        query = select(Paper.id).where(
+            and_(
+                Paper.id.in_(file_ids),
+                Paper.workspace_id == workspace_id
+            )
+        )
+        result = await db.execute(query)
+        valid_paper_ids = [str(row[0]) for row in result]
+        
+        # 批次設定選取狀態
+        for paper_id in valid_paper_ids:
+            await self.set_paper_selection(db, paper_id, True)
+        
+        return len(valid_paper_ids)
+    
+    async def get_papers_sections_summary_by_workspace(self, db: AsyncSession, workspace_id: UUID) -> Dict[str, Any]:
+        """取得工作區內檔案的章節摘要"""
+        query = (
+            select(
+                Paper.id,
+                Paper.original_filename,
+                func.count(func.distinct(PaperSection.id)).label('section_count'),
+                func.count(func.distinct(Sentence.id)).label('sentence_count')
+            )
+            .outerjoin(PaperSection, Paper.id == PaperSection.paper_id)
+            .outerjoin(Sentence, Paper.id == Sentence.paper_id)
+            .where(Paper.workspace_id == workspace_id)
+            .group_by(Paper.id, Paper.original_filename)
+        )
+        
+        result = await db.execute(query)
+        summaries = []
+        
+        total_sections = 0
+        total_sentences = 0
+        
+        for paper_id, filename, section_count, sentence_count in result:
+            section_count = section_count or 0
+            sentence_count = sentence_count or 0
+            
+            summaries.append({
+                "paper_id": str(paper_id),
+                "filename": filename,
+                "section_count": section_count,
+                "sentence_count": sentence_count
+            })
+            
+            total_sections += section_count
+            total_sentences += sentence_count
+        
+        return {
+            "workspace_id": str(workspace_id),
+            "total_papers": len(summaries),
+            "total_sections": total_sections,
+            "total_sentences": total_sentences,
+            "papers": summaries
+        }
+    
+    async def search_sentences_in_workspace(
+        self, 
+        db: AsyncSession, 
+        workspace_id: UUID,
+        defining_types: Optional[List[str]] = None,
+        keywords: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """在工作區範圍內搜尋句子"""
+        # 首先取得工作區內的所有論文ID
+        paper_query = select(Paper.id).where(Paper.workspace_id == workspace_id)
+        result = await db.execute(paper_query)
+        paper_ids = [str(row[0]) for row in result]
+        
+        if not paper_ids:
+            return []
+        
+        # 呼叫原有的搜尋方法，但限制在工作區內的論文
+        return await self.search_sentences(db, paper_ids, defining_types, keywords)
 
 # 建立服務實例
 db_service = DatabaseService() 

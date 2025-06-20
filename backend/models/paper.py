@@ -1,6 +1,5 @@
 from sqlalchemy import Column, String, Integer, Text, Boolean, TIMESTAMP, DECIMAL, ForeignKey, UUID, BIGINT
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from pydantic import BaseModel, Field
@@ -9,7 +8,7 @@ from datetime import datetime
 from enum import Enum
 import uuid
 
-Base = declarative_base()
+from .base import Base
 
 # ===== SQLAlchemy ORM Models =====
 

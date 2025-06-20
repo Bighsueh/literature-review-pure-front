@@ -5,7 +5,7 @@
 
 from .paper import *
 from .user import User, Workspace, UserCreate, UserUpdate, UserResponse, WorkspaceCreate, WorkspaceUpdate, WorkspaceResponse, UserWithWorkspacesResponse
-from .chat import ChatHistory, ChatHistoryCreate, ChatHistoryResponse, ChatSessionResponse
+from .chat import ChatHistory, ChatHistoryCreate, ChatHistoryResponse
 
 __all__ = [
     # Paper related models
@@ -20,5 +20,5 @@ __all__ = [
     "WorkspaceCreate", "WorkspaceUpdate", "WorkspaceResponse", "UserWithWorkspacesResponse",
     
     # Chat models
-    "ChatHistory", "ChatHistoryCreate", "ChatHistoryResponse", "ChatSessionResponse",
+    "ChatHistory", "ChatHistoryCreate", "ChatHistoryResponse",
 ] 

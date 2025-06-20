@@ -1,6 +1,9 @@
-from sqlalchemy import Column, String, ForeignKey, TIMESTAMP, UUID, Text, CheckConstraint
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.declarative import declarative_base
+"""
+對話歷史模型
+支援工作區隔離的對話記錄
+"""
+
+from sqlalchemy import Column, String, ForeignKey, TIMESTAMP, UUID, Text, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from pydantic import BaseModel, Field
@@ -8,7 +11,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
 
-Base = declarative_base()
+from .base import Base
 
 # ===== SQLAlchemy ORM Models =====
 
@@ -17,31 +20,27 @@ class ChatHistory(Base):
     
     id = Column(UUID, primary_key=True, default=uuid.uuid4)
     workspace_id = Column(UUID, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False)
-    role = Column(String(20), nullable=False)
-    content = Column(Text, nullable=False)
-    message_metadata = Column(JSONB)
+    user_question = Column(Text, nullable=False)
+    ai_response = Column(Text, nullable=False)
+    context_papers = Column(JSON, nullable=True)  # 儲存相關論文ID列表
+    context_sentences = Column(JSON, nullable=True)  # 儲存相關句子ID列表
+    query_metadata = Column(JSON, nullable=True)  # 儲存查詢的元數據（如查詢時間、處理時間等）
     created_at = Column(TIMESTAMP, default=func.current_timestamp())
     
     # Relationships
     workspace = relationship("Workspace", back_populates="chat_histories")
-    
-    # Constraints
-    __table_args__ = (
-        CheckConstraint("role IN ('user', 'assistant')", name='check_role_valid'),
-    )
-
 
 # ===== Pydantic Schemas =====
 
 class ChatHistoryBase(BaseModel):
-    role: str = Field(..., pattern=r'^(user|assistant)$')
-    content: str
-    message_metadata: Optional[Dict[str, Any]] = None
-
+    user_question: str
+    ai_response: str
+    context_papers: Optional[List[str]] = None
+    context_sentences: Optional[List[str]] = None
+    query_metadata: Optional[Dict[str, Any]] = None
 
 class ChatHistoryCreate(ChatHistoryBase):
     workspace_id: str
-
 
 class ChatHistoryResponse(ChatHistoryBase):
     id: str
@@ -51,11 +50,20 @@ class ChatHistoryResponse(ChatHistoryBase):
     class Config:
         from_attributes = True
 
+class ChatHistoryListResponse(BaseModel):
+    chats: List[ChatHistoryResponse]
+    total_count: int
+    page: int
+    page_size: int
+    has_next: bool
+    has_previous: bool
 
-class ChatSessionResponse(BaseModel):
-    workspace_id: str
-    workspace_name: str
-    messages: List[ChatHistoryResponse] = []
+class ChatContextInfo(BaseModel):
+    """對話上下文信息"""
+    paper_titles: List[str] = []
+    sentence_count: int = 0
+    source_papers: List[Dict[str, Any]] = []
     
-    class Config:
-        from_attributes = True 
+class ChatWithContextResponse(ChatHistoryResponse):
+    """包含上下文信息的對話響應"""
+    context_info: Optional[ChatContextInfo] = None 
