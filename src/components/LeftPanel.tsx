@@ -1,12 +1,15 @@
 import React from 'react';
-import FileUploadZone from './file/FileUploadZone/FileUploadZone';
-import FileList from './file/FileList/FileList';
+import WorkspaceFileUpload from './file/WorkspaceFileUpload';
+import WorkspaceFileList from './file/WorkspaceFileList';
+import { useWorkspaceContext } from '../contexts/WorkspaceContext';
 
 interface LeftPanelProps {
   onResize?: (newWidth: number) => void;
 }
 
 const LeftPanel: React.FC<LeftPanelProps> = ({ onResize }) => {
+  const { currentWorkspace } = useWorkspaceContext();
+  
   const handleResizeStart = (e: React.MouseEvent) => {
     e.preventDefault();
     
@@ -30,15 +33,17 @@ const LeftPanel: React.FC<LeftPanelProps> = ({ onResize }) => {
   return (
     <div className="flex flex-col h-full relative">
       <div className="p-4 border-b">
-        <h2 className="text-lg font-medium text-gray-900">檔案管理</h2>
+        <h2 className="text-lg font-medium text-gray-900">
+          {currentWorkspace ? `${currentWorkspace.name} - 檔案管理` : '檔案管理'}
+        </h2>
       </div>
       
       <div className="p-4">
-        <FileUploadZone />
+        <WorkspaceFileUpload compact />
       </div>
       
       <div className="flex-1 overflow-hidden" id="file-upload-list">
-        <FileList />
+        <WorkspaceFileList compact />
       </div>
       
       {/* Resize handle */}

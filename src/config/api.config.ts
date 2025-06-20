@@ -22,19 +22,24 @@ const getEnvNumber = (key: string, defaultValue: number): number => {
 
 // API 基礎配置
 export const API_CONFIG = {
-  // 主要 API 配置
-  API_BASE_URL: getEnvVar('VITE_API_BASE_URL', 'http://localhost:28001/api'),
+  // 主要 API 配置 - 更新為新的後端結構
+  API_BASE_URL: getEnvVar('VITE_API_BASE_URL', 'http://localhost:8000/api'),
   API_TIMEOUT: getEnvNumber('VITE_API_TIMEOUT', 30000),
   
   // WebSocket 配置
-  WS_BASE_URL: getEnvVar('VITE_WS_BASE_URL', 'ws://localhost:28001'),
+  WS_BASE_URL: getEnvVar('VITE_WS_BASE_URL', 'ws://localhost:8000'),
   
   // Split Sentences 服務配置
   SPLIT_SENTENCES_BASE_URL: getEnvVar('VITE_SPLIT_SENTENCES_BASE_URL', 'http://localhost:28000'),
   
+  // 認證配置
+  AUTH_BASE_URL: getEnvVar('VITE_AUTH_BASE_URL', 'http://localhost:8000'),
+  GOOGLE_OAUTH_CLIENT_ID: getEnvVar('VITE_GOOGLE_OAUTH_CLIENT_ID', ''),
+  
   // 功能開關
-  USE_UNIFIED_QUERY: getEnvBool('VITE_USE_UNIFIED_QUERY', false),
-  USE_UNIFIED_FILE_PROCESSOR: getEnvBool('VITE_USE_UNIFIED_FILE_PROCESSOR', false),
+  USE_UNIFIED_QUERY: getEnvBool('VITE_USE_UNIFIED_QUERY', true), // 新架構默認開啟
+  USE_WORKSPACE_ISOLATION: getEnvBool('VITE_USE_WORKSPACE_ISOLATION', true),
+  ENABLE_JWT_AUTH: getEnvBool('VITE_ENABLE_JWT_AUTH', true),
   DISABLE_DIRECT_N8N: getEnvBool('VITE_DISABLE_DIRECT_N8N', false),
   
   // 開發設置
@@ -52,11 +57,25 @@ export const getApiUrl = (endpoint: string = ''): string => {
   return cleanEndpoint ? `${baseUrl}/${cleanEndpoint}` : baseUrl;
 };
 
+// 獲取認證 URL
+export const getAuthUrl = (endpoint: string = ''): string => {
+  const baseUrl = API_CONFIG.AUTH_BASE_URL;
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
+  return cleanEndpoint ? `${baseUrl}/${cleanEndpoint}` : baseUrl;
+};
+
 // 獲取 WebSocket URL
 export const getWebSocketUrl = (path: string = ''): string => {
   const baseUrl = API_CONFIG.WS_BASE_URL;
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   return `${baseUrl}${cleanPath}`;
+};
+
+// 獲取工作區範圍的 API URL
+export const getWorkspaceApiUrl = (workspaceId: string, endpoint: string = ''): string => {
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
+  const workspaceEndpoint = cleanEndpoint ? `workspaces/${workspaceId}/${cleanEndpoint}` : `workspaces/${workspaceId}`;
+  return getApiUrl(workspaceEndpoint);
 };
 
 // 獲取 Split Sentences URL
@@ -72,6 +91,7 @@ export const getSplitSentencesUrl = (): string => {
 export const validateConfig = (): void => {
   const requiredConfigs = [
     { key: 'API_BASE_URL', value: API_CONFIG.API_BASE_URL },
+    { key: 'AUTH_BASE_URL', value: API_CONFIG.AUTH_BASE_URL },
     { key: 'WS_BASE_URL', value: API_CONFIG.WS_BASE_URL },
   ];
 
@@ -81,6 +101,11 @@ export const validateConfig = (): void => {
     const missing = missingConfigs.map(c => c.key).join(', ');
     throw new Error(`缺少必要的配置: ${missing}`);
   }
+
+  // 警告缺少 Google OAuth 配置
+  if (API_CONFIG.ENABLE_JWT_AUTH && !API_CONFIG.GOOGLE_OAUTH_CLIENT_ID) {
+    console.warn('⚠️ 缺少 Google OAuth Client ID 配置');
+  }
 };
 
 // 開發時顯示配置信息
@@ -88,12 +113,14 @@ export const logConfig = (): void => {
   if (API_CONFIG.IS_DEVELOPMENT && API_CONFIG.DEBUG_MODE) {
     console.group('🔧 API 配置信息');
     console.log('API Base URL:', API_CONFIG.API_BASE_URL);
+    console.log('Auth Base URL:', API_CONFIG.AUTH_BASE_URL);
     console.log('WebSocket URL:', API_CONFIG.WS_BASE_URL);
     console.log('Split Sentences URL:', getSplitSentencesUrl());
     console.log('Timeout:', API_CONFIG.API_TIMEOUT);
     console.log('功能開關:', {
       USE_UNIFIED_QUERY: API_CONFIG.USE_UNIFIED_QUERY,
-      USE_UNIFIED_FILE_PROCESSOR: API_CONFIG.USE_UNIFIED_FILE_PROCESSOR,
+      USE_WORKSPACE_ISOLATION: API_CONFIG.USE_WORKSPACE_ISOLATION,
+      ENABLE_JWT_AUTH: API_CONFIG.ENABLE_JWT_AUTH,
       DISABLE_DIRECT_N8N: API_CONFIG.DISABLE_DIRECT_N8N,
     });
     console.groupEnd();

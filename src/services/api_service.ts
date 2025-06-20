@@ -1,6 +1,9 @@
 /**
- * 統一 API 服務層
+ * 統一 API 服務層 - 緊急修復版本
  * 負責所有與後端 API 的通訊，移除直接資料庫存取
+ * 
+ * 修復狀態：EMERGENCY FIX - 硬編碼工作區支援
+ * 下一步：實現真正的工作區管理和認證
  */
 // import { errorHandler } from '@/utils/error_handler';
 
@@ -11,7 +14,34 @@ export interface ApiResponse<T = unknown> {
   message?: string;
 }
 
-export interface PaperInfo {
+// 新增工作區相關類型定義
+export interface Workspace {
+  id: string;
+  name: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+  owner_id: string;
+  is_active: boolean;
+}
+
+export interface WorkspaceFile {
+  id: string;
+  workspace_id: string;
+  title: string;
+  original_filename: string;
+  file_path: string;
+  file_hash: string;
+  file_size: number;
+  upload_time: string;
+  processing_status: 'pending' | 'processing' | 'completed' | 'failed';
+  selected: boolean;
+  section_count: number;
+  sentence_count: number;
+}
+
+// 重新命名舊的介面避免混淆
+export interface LegacyPaperInfo {
   id: string;
   title: string;
   authors?: string[];
@@ -87,7 +117,7 @@ export interface QueryResponse {
 
 export interface UploadResponse {
   paper_id: string;
-  task_id?: string;  // 新上傳文件會有task_id
+  task_id?: string;  
   message: string;
   duplicate?: boolean;
   filename?: string;
@@ -116,9 +146,10 @@ export interface PaperStatusResponse {
     details?: unknown;
   } | null;
   error_message?: string;
-  task_id?: string; // May still be present if task is active
+  task_id?: string;
 }
 
+// 保持向後相容性
 export interface Paper {
   id: string;
   title: string;
@@ -137,11 +168,18 @@ import { API_CONFIG, getWebSocketUrl } from '../config/api.config';
 class ApiService {
   private readonly baseUrl: string;
   private readonly timeout: number;
+  
+  // 緊急修復：硬編碼一個預設工作區ID
+  // TODO: 這需要在第二階段實現真正的工作區管理
+  private readonly EMERGENCY_WORKSPACE_ID = 'temp-workspace-id';
 
   constructor() {
-    // 使用統一的配置管理
     this.baseUrl = API_CONFIG.API_BASE_URL;
     this.timeout = API_CONFIG.API_TIMEOUT;
+    
+    console.warn('🚨 API Service running in EMERGENCY MODE');
+    console.warn('🚨 Using hardcoded workspace ID:', this.EMERGENCY_WORKSPACE_ID);
+    console.warn('🚨 This MUST be fixed in the next iteration');
   }
 
   private async request<T>(
@@ -176,7 +214,6 @@ class ApiService {
         const errorData = await response.json().catch(() => ({}));
         const errorMessage = errorData.detail?.message || errorData.detail || `HTTP ${response.status}: ${response.statusText}`;
         
-        // 根據狀態碼創建適當的錯誤
         let error: Error;
         if (response.status >= 500) {
           error = new Error(errorMessage);
@@ -191,18 +228,7 @@ class ApiService {
           error = new Error(errorMessage);
         }
         
-        // 使用錯誤處理器記錄錯誤
-        // const errorDetails = errorHandler.handleError(error, {
-        //   endpoint,
-        //   statusCode: response.status,
-        //   url,
-        //   method: options.method || 'GET'
-        // });
-        
-        return {
-          success: false,
-          error: errorMessage, //errorDetails.message,
-        };
+        throw error;
       }
 
       const data = await response.json();
@@ -210,141 +236,127 @@ class ApiService {
         success: true,
         data,
       };
+
     } catch (error) {
-      const err = error as Error;
-      
-      // 使用錯誤處理器處理異常
-      // const errorDetails = errorHandler.handleError(err, {
-      //   endpoint,
-      //   url: `${this.baseUrl}${endpoint}`,
-      //   method: options.method || 'GET'
-      // });
-      
+      console.error('API request failed:', error);
       return {
         success: false,
-        error: err.message, //errorDetails.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
   }
 
-  // ===== 檔案管理 API =====
+  // ===== 緊急修復：工作區化的檔案管理 API =====
 
   /**
-   * 上傳 PDF 檔案
+   * 上傳檔案到當前工作區 (緊急修復版本)
    */
   async uploadFile(file: File): Promise<ApiResponse<UploadResponse>> {
     const formData = new FormData();
     formData.append('file', file);
 
-    return this.request('/upload/', {
+    console.warn('🚨 Emergency upload to workspace:', this.EMERGENCY_WORKSPACE_ID);
+    
+    return this.request(`/workspaces/${this.EMERGENCY_WORKSPACE_ID}/files/`, {
       method: 'POST',
       body: formData,
-      headers: {}, // 移除 Content-Type，讓瀏覽器自動設置
+      headers: {}, 
     });
   }
 
   /**
-   * 獲取所有論文列表
+   * 獲取當前工作區的檔案列表 (緊急修復版本)
    */
-  async getPapers(): Promise<ApiResponse<PaperInfo[]>> {
-    return this.request('/papers/');
+  async getPapers(): Promise<ApiResponse<WorkspaceFile[]>> {
+    console.warn('🚨 Emergency get files from workspace:', this.EMERGENCY_WORKSPACE_ID);
+    
+    return this.request(`/workspaces/${this.EMERGENCY_WORKSPACE_ID}/files/`);
   }
 
   /**
-   * 切換論文選取狀態
+   * 切換檔案選取狀態 (緊急修復版本)
    */
   async togglePaperSelection(paperId: string, selected: boolean): Promise<ApiResponse<{ message: string }>> {
-    return this.request(`/papers/${paperId}/select`, {
+    console.warn('🚨 Emergency toggle file selection in workspace:', this.EMERGENCY_WORKSPACE_ID);
+    
+    return this.request(`/workspaces/${this.EMERGENCY_WORKSPACE_ID}/files/batch-select`, {
       method: 'POST',
-      body: JSON.stringify({ is_selected: selected }),
+      body: JSON.stringify({ file_ids: [paperId], selected }),
     });
   }
 
   /**
-   * 批次設置論文選取狀態
+   * 批次設置檔案選取狀態 (緊急修復版本)
    */
   async setBatchPaperSelection(paperIds: string[], selected: boolean): Promise<ApiResponse<{ message: string }>> {
-    return this.request('/papers/batch-select', {
+    console.warn('🚨 Emergency batch select files in workspace:', this.EMERGENCY_WORKSPACE_ID);
+    
+    return this.request(`/workspaces/${this.EMERGENCY_WORKSPACE_ID}/files/batch-select`, {
       method: 'POST',
-      body: JSON.stringify({ paper_ids: paperIds, selected }),
+      body: JSON.stringify({ file_ids: paperIds, selected }),
     });
   }
 
   /**
-   * 刪除論文
+   * 刪除檔案 (緊急修復版本)
    */
   async deletePaper(paperId: string): Promise<ApiResponse<{ message: string }>> {
-    return this.request(`/papers/${paperId}`, {
+    console.warn('🚨 Emergency delete file from workspace:', this.EMERGENCY_WORKSPACE_ID);
+    
+    return this.request(`/workspaces/${this.EMERGENCY_WORKSPACE_ID}/files/${paperId}`, {
       method: 'DELETE',
     });
   }
 
-  // ===== 處理狀態 API =====
+  // ===== 緊急修復：工作區化的查詢 API =====
 
   /**
-   * 獲取處理狀態
-   */
-  async getProcessingStatus(): Promise<ApiResponse<ProcessingStatus>> {
-    return this.request('/processing/queue/status');
-  }
-
-  /**
-   * 獲取論文的處理狀態
-   */
-  async getPaperProcessingStatus(paperId: string): Promise<ApiResponse<PaperProcessingStatus>> {
-    return this.request(`/papers/${paperId}/status`);
-  }
-
-  /**
-   * 開始處理選中的論文
-   */
-  async startProcessing(): Promise<ApiResponse<{ message: string }>> {
-    return this.request('/processing/start', {
-      method: 'POST',
-    });
-  }
-
-  /**
-   * 停止當前處理
-   */
-  async stopProcessing(): Promise<ApiResponse<{ message: string }>> {
-    return this.request('/processing/stop', {
-      method: 'POST',
-    });
-  }
-
-  // ===== 查詢 API =====
-
-  /**
-   * 執行智能查詢
+   * 執行智能查詢 (緊急修復版本)
    */
   async query(request: QueryRequest): Promise<ApiResponse<QueryResponse>> {
-    return this.request('/papers/unified-query', {
+    console.warn('🚨 Emergency query in workspace:', this.EMERGENCY_WORKSPACE_ID);
+    
+    return this.request(`/workspaces/${this.EMERGENCY_WORKSPACE_ID}/query/`, {
       method: 'POST',
       body: JSON.stringify({ query: request.query }),
     });
   }
 
   /**
-   * 獲取論文章節摘要（用於智能查詢）
+   * 獲取檔案章節摘要 (緊急修復版本)
    */
-  async getPaperSections(paperIds?: string[]): Promise<ApiResponse<Record<string, unknown>>> {
-    const params = paperIds ? `?paper_ids=${paperIds.join(',')}` : '';
-    return this.request(`/papers/sections-summary${params}`);
+  async getPaperSections(): Promise<ApiResponse<Record<string, unknown>>> {
+    console.warn('🚨 Emergency get sections from workspace:', this.EMERGENCY_WORKSPACE_ID);
+    
+    return this.request(`/workspaces/${this.EMERGENCY_WORKSPACE_ID}/files/sections-summary`);
   }
 
-  // ===== 健康檢查 API =====
+  // ===== 保持舊的方法以維持相容性 =====
 
-  /**
-   * 檢查 API 服務健康狀態
-   */
+  async getProcessingStatus(): Promise<ApiResponse<ProcessingStatus>> {
+    return this.request('/processing/queue/status');
+  }
+
+  async getPaperProcessingStatus(paperId: string): Promise<ApiResponse<PaperProcessingStatus>> {
+    return this.request(`/papers/${paperId}/status`);
+  }
+
+  async startProcessing(): Promise<ApiResponse<{ message: string }>> {
+    return this.request('/processing/start', {
+      method: 'POST',
+    });
+  }
+
+  async stopProcessing(): Promise<ApiResponse<{ message: string }>> {
+    return this.request('/processing/stop', {
+      method: 'POST',
+    });
+  }
+
   async healthCheck(): Promise<ApiResponse<{ status: string; services: Record<string, boolean> }>> {
     return this.request('/health');
   }
 
-  /**
-   * 檢查各個服務的狀態
-   */
   async getServiceStatus(): Promise<ApiResponse<{
     grobid: boolean;
     n8n: boolean;
@@ -354,11 +366,6 @@ class ApiService {
     return this.request('/status');
   }
 
-  // ===== WebSocket 連接（用於實時更新） =====
-
-  /**
-   * 創建 WebSocket 連接以獲取實時處理更新
-   */
   createProcessingWebSocket(onMessage: (data: unknown) => void, onError?: (error: Event) => void): WebSocket | null {
     try {
       const wsUrl = getWebSocketUrl('/processing/ws');
@@ -385,16 +392,10 @@ class ApiService {
     }
   }
 
-  /**
-   * 獲取特定論文的處理狀態（新版，可靠）
-   */
   async getPaperStatus(paperId: string): Promise<ApiResponse<PaperStatusResponse>> {
     return this.request(`/papers/${paperId}/status`);
   }
 
-  /**
-   * 獲取論文的所有已處理句子
-   */
   async getPaperSentences(paperId: string): Promise<ApiResponse<{
     paper_id: string;
     sentences: Array<{
@@ -416,9 +417,6 @@ class ApiService {
     return this.request(`/papers/${paperId}/sentences`);
   }
 
-  /**
-   * 獲取所有已選取論文的句子資料
-   */
   async getAllSelectedPapersSentences(): Promise<ApiResponse<{
     sentences: Array<{
       id: string;
@@ -441,20 +439,35 @@ class ApiService {
       processing_status: string;
     }>;
   }>> {
-    return this.request('/papers/sentences/all');
+    return this.request('/papers/selected/sentences');
+  }
+
+  async getTaskStatus(taskId: string): Promise<ApiResponse<TaskStatus>> {
+    return this.request(`/tasks/${taskId}/status`);
+  }
+
+  // ===== 緊急新增：臨時工作區管理方法 =====
+  
+  /**
+   * 獲取當前硬編碼工作區的資訊 (緊急修復)
+   */
+  getCurrentWorkspaceId(): string {
+    return this.EMERGENCY_WORKSPACE_ID;
   }
 
   /**
-   * @deprecated The task-based endpoint is unreliable. Use getPaperStatus instead.
-   * 獲取特定任務的詳細進度
+   * 設置緊急工作區ID (用於測試)
+   * 注意：這是緊急修復方法，應該在第二階段移除
    */
-  async getTaskStatus(taskId: string): Promise<ApiResponse<TaskStatus>> {
-    console.warn("getTaskStatus is deprecated and should not be used. It might be removed in future versions.");
-    // 返回一個模擬的錯誤或空數據，因為這個端點不應再被依賴
-    return {
-      success: false,
-      error: `Task-based status check for ${taskId} is deprecated.`
-    };
+  setEmergencyWorkspaceId(workspaceId: string): void {
+    console.warn('🚨 Changing emergency workspace ID to:', workspaceId);
+    console.warn('🚨 This method will be removed in the next iteration');
+    // 暫時使用 Object.defineProperty 來修改 readonly 屬性
+    Object.defineProperty(this, 'EMERGENCY_WORKSPACE_ID', {
+      value: workspaceId,
+      writable: false,
+      configurable: true
+    });
   }
 }
 
