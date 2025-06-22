@@ -145,6 +145,7 @@ class SystemSettings(Base):
 
 class ProcessingStatusEnum(str, Enum):
     uploading = "uploading"
+    pending = "pending"
     processing = "processing"
     completed = "completed"
     error = "error"

@@ -101,7 +101,7 @@ class DatabaseService:
                 "pdf_deleted": paper.pdf_deleted,
                 "error_message": paper.error_message,
                 "processing_completed_at": paper.processing_completed_at,
-                "selected": is_selected if is_selected is not None else False,
+                "is_selected": is_selected if is_selected is not None else False,
                 "authors": [],  # Placeholder, to be implemented
                 "section_count": section_count or 0,  # 修復：使用真實計數
                 "sentence_count": sentence_count or 0,  # 修復：使用真實計數
@@ -165,6 +165,16 @@ class DatabaseService:
         logger.info(f"開始儲存章節和句子資料 - paper_id: {paper_id}, sections: {len(sections_analysis)}, sentences: {len(sentences_data)}")
         
         try:
+            # 首先獲取paper的workspace_id
+            paper_query = select(Paper.workspace_id).where(Paper.id == paper_id)
+            paper_result = await db.execute(paper_query)
+            workspace_id = paper_result.scalar_one_or_none()
+            
+            if workspace_id is None:
+                raise ValueError(f"無法找到paper或workspace_id為空: {paper_id}")
+            
+            logger.info(f"取得paper的workspace_id: {workspace_id} - paper_id: {paper_id}")
+            
             # 1. 批次插入章節
             sections_to_insert = []
             for s in sections_analysis:
@@ -175,6 +185,7 @@ class DatabaseService:
                 sections_to_insert.append({
                     "id": s["section_id"], 
                     "paper_id": paper_id, 
+                    "workspace_id": workspace_id,  # 新增workspace_id
                     "section_type": s["section_type"],
                     "content": s["content"], 
                     "section_order": s.get("order"), 
@@ -182,7 +193,7 @@ class DatabaseService:
                 })
             
             if sections_to_insert:
-                logger.info(f"準備插入 {len(sections_to_insert)} 個章節")
+                logger.info(f"準備插入 {len(sections_to_insert)} 個章節 (含workspace_id: {workspace_id})")
                 stmt = pg_insert(PaperSection).values(sections_to_insert)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=['id'],
@@ -205,6 +216,7 @@ class DatabaseService:
                     "id": s["sentence_id"], 
                     "paper_id": paper_id, 
                     "section_id": s["section_id"],
+                    "workspace_id": workspace_id,  # 新增workspace_id
                     "content": s["text"], 
                     "word_count": s.get("word_count"),
                     "sentence_order": s.get("order", 0),
@@ -213,7 +225,7 @@ class DatabaseService:
                 })
             
             if sentences_to_insert:
-                logger.info(f"準備插入 {len(sentences_to_insert)} 個句子")
+                logger.info(f"準備插入 {len(sentences_to_insert)} 個句子 (含workspace_id: {workspace_id})")
                 stmt = pg_insert(Sentence).values(sentences_to_insert)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=['id'],
@@ -235,7 +247,7 @@ class DatabaseService:
             
             # 4. 關鍵修復：確保提交事務
             await db.commit()
-            logger.info(f"章節和句子資料已成功提交到資料庫 - paper_id: {paper_id}")
+            logger.info(f"章節和句子資料已成功提交到資料庫 - paper_id: {paper_id}, workspace_id: {workspace_id}")
             
             # 4.5 驗證狀態更新是否成功
             check_result = await db.execute(
@@ -706,6 +718,10 @@ class DatabaseService:
         """標記論文為已選取"""
         return await self.set_paper_selection(db, paper_id, True, workspace_id)
     
+    async def mark_paper_unselected(self, db: AsyncSession, paper_id: str, workspace_id: Optional[UUID] = None) -> bool:
+        """標記論文為未選取"""
+        return await self.set_paper_selection(db, paper_id, False, workspace_id)
+    
     async def select_all_papers(self, db: AsyncSession) -> bool:
         """全選所有論文"""
         # 取得所有論文ID
@@ -997,7 +1013,7 @@ class DatabaseService:
                         "pdf_deleted": paper.pdf_deleted,
                         "error_message": paper.error_message,
                         "processing_completed_at": paper.processing_completed_at,
-                        "selected": is_selected if is_selected is not None else False,
+                        "is_selected": is_selected if is_selected is not None else False,
                         "authors": [],
                         "section_count": 0,  # 暫時設為 0
                         "sentence_count": 0,  # 暫時設為 0
@@ -1047,7 +1063,7 @@ class DatabaseService:
                         "pdf_deleted": paper.pdf_deleted,
                         "error_message": paper.error_message,
                         "processing_completed_at": paper.processing_completed_at,
-                        "selected": is_selected if is_selected is not None else False,
+                        "is_selected": is_selected if is_selected is not None else False,
                         "authors": [],
                         "section_count": 0,  # 暫時設為 0
                         "sentence_count": 0,  # 暫時設為 0
@@ -1072,6 +1088,7 @@ class DatabaseService:
             .where(
                 and_(
                     Paper.workspace_id == workspace_id,
+                    PaperSelection.workspace_id == workspace_id,
                     PaperSelection.is_selected == True
                 )
             )
@@ -1192,30 +1209,7 @@ class DatabaseService:
         # 呼叫原有的搜尋方法，但限制在工作區內的論文
         return await self.search_sentences(db, paper_ids, defining_types, keywords)
 
-    async def get_selected_papers_by_workspace(
-        self, 
-        db: AsyncSession, 
-        workspace_id: UUID
-    ) -> List[Paper]:
-        """
-        獲取工作區範圍內的已選取論文 - 嚴格工作區隔離
-        """
-        try:
-            stmt = select(Paper).where(
-                and_(
-                    Paper.workspace_id == workspace_id,
-                    Paper.is_selected == True
-                )
-            )
-            result = await db.execute(stmt)
-            papers = result.scalars().all()
-            
-            logger.info(f"工作區 {workspace_id} 中找到 {len(papers)} 篇已選取論文")
-            return papers
-            
-        except Exception as e:
-            logger.error(f"獲取工作區論文失敗: workspace={workspace_id}, error={str(e)}")
-            return []
+
 
     async def get_papers_with_sections_summary(
         self, 
@@ -1249,7 +1243,7 @@ class DatabaseService:
                 paper_summary = {
                     'file_name': paper.file_name,
                     'paper_id': str(paper.id),
-                    'title': paper.title or '',
+                    'title': paper.original_filename or paper.file_name or '',
                     'workspace_id': str(paper.workspace_id),
                     'sections': []
                 }
