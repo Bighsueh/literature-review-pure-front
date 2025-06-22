@@ -53,8 +53,8 @@ async def get_current_user(
         HTTPException: 當認證失敗時
     """
     
-    # 開發模式：如果沒有 credentials，使用預設用戶
-    if settings.debug and not credentials:
+    # 開發模式：總是使用第一個可用用戶進行認證繞過
+    if settings.debug:
         logger.warning("🚨 開發模式：使用預設用戶進行認證繞過")
         try:
             # 獲取第一個可用用戶

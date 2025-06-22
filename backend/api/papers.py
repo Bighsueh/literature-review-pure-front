@@ -3,9 +3,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import time
+from dataclasses import asdict
 
 from ..core.database import get_db
 from ..services.db_service import db_service
+from ..services.queue_service import queue_service
 from ..core.logging import get_logger
 from ..models.paper import (
     PaperResponse, PaperSelectionUpdate, QueryRequest, QueryResult,
@@ -292,7 +294,7 @@ async def get_paper_status(paper_id: str, db: AsyncSession = Depends(get_db)):
             return {
                 "status": "processing",
                 "paper_id": str(paper.id),
-                "progress": active_task.progress.to_dict() if active_task.progress else None,
+                "progress": asdict(active_task.progress) if active_task.progress else None,
                 "task_id": active_task.task_id
             }
 
