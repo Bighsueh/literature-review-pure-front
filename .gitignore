@@ -138,3 +138,13 @@ backend/backup/
 *_CHECKLIST.md
 *_PLAN.md
 
+# Diagnostic and verification files
+diagnose_*.py
+test_*.html
+test_*.js
+test_*.mjs
+verify_*.py
+*_verification_report.json
+verification_report_*.json
+VERIFICATION_GUIDE.md
+
