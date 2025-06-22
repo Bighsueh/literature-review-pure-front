@@ -61,6 +61,15 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   // 更新的引用內容渲染
   const renderContentWithReferences = () => {
+    // 防護性檢查：確保 content 存在且為字串
+    if (!message.content || typeof message.content !== 'string') {
+      return (
+        <div className="text-gray-500 italic">
+          {message.content === undefined ? '訊息內容載入中...' : '訊息內容格式錯誤'}
+        </div>
+      );
+    }
+
     const refRegex = /\[\[ref:([a-zA-Z0-9-_]+)\]\]/g;
     const parts = message.content.split(refRegex);
     

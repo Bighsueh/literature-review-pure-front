@@ -59,13 +59,13 @@ async def get_legacy_papers(
                 'id': str(paper.id),
                 'file_name': paper.file_name,
                 'original_filename': paper.original_filename,
-                'title': paper.title,
-                'upload_time': paper.upload_time.isoformat() if paper.upload_time else None,
+                'title': paper.original_filename or paper.file_name or '',
+                'upload_time': getattr(paper, 'upload_time', paper.upload_timestamp).isoformat() if getattr(paper, 'upload_time', paper.upload_timestamp) else None,
                 'processing_status': paper.processing_status,
-                'is_selected': paper.is_selected,
+                'is_selected': getattr(paper, 'is_selected', False),
                 'workspace_id': str(paper.workspace_id),
                 'file_size': paper.file_size,
-                'file_type': paper.file_type
+                'file_type': getattr(paper, 'file_type', 'pdf')
             })
         
         logger.info(f"用戶 {current_user.id} 存取工作區 {workspace_id} 的 {len(formatted_papers)} 篇論文")
@@ -137,13 +137,13 @@ async def get_legacy_paper_detail(
             'id': str(paper.id),
             'file_name': paper.file_name,
             'original_filename': paper.original_filename,
-            'title': paper.title,
-            'upload_time': paper.upload_time.isoformat() if paper.upload_time else None,
+            'title': paper.original_filename or paper.file_name or '',
+            'upload_time': getattr(paper, 'upload_time', paper.upload_timestamp).isoformat() if getattr(paper, 'upload_time', paper.upload_timestamp) else None,
             'processing_status': paper.processing_status,
-            'is_selected': paper.is_selected,
+            'is_selected': getattr(paper, 'is_selected', False),
             'workspace_id': str(paper.workspace_id),
             'file_size': paper.file_size,
-            'file_type': paper.file_type,
+            'file_type': getattr(paper, 'file_type', 'pdf'),
             'sections': formatted_sections,
             'section_count': len(formatted_sections)
         }

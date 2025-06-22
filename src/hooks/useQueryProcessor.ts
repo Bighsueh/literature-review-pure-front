@@ -5,6 +5,7 @@ import { useAppStore } from '../stores/appStore';
 import { useChatStore } from '../stores/chatStore';
 import { apiService } from '../services/api_service';
 import { Message, Conversation, Reference } from '../types/chat';
+import { createMessage, createSystemMessage, createErrorMessage } from '../utils/messageValidation';
 
 export const useQueryProcessor = () => {
   const { setProgress, setSelectedReferences } = useAppStore();
@@ -70,13 +71,7 @@ export const useQueryProcessor = () => {
         error: null
       });
 
-      const userMessageId = uuidv4();
-      const userMessage: Message = {
-        id: userMessageId,
-        type: 'user',
-        content: queryText,
-        timestamp: new Date()
-      };
+      const userMessage = createMessage('user', queryText);
       addMessage(activeConversationId, userMessage);
       console.log('Added user message to conversation:', activeConversationId, userMessage);
 
@@ -94,18 +89,17 @@ export const useQueryProcessor = () => {
         throw new Error(apiResult.error || '後端查詢失敗');
       }
 
-      const { response, references } = apiResult.data;
+      // 修正數據路徑：從 results 中讀取實際的回應數據
+      const apiData = apiResult.data as any;
+      const results = apiData.results || apiData;
+      const { response, references } = results;
 
-      const systemMessage: Message = {
-        id: uuidv4(),
-        type: 'system',
-        content: response,
+      console.log('API 回應數據:', { response, references, fullData: apiResult.data });
+
+      const systemMessage = createSystemMessage(response, {
         references: references as unknown as Reference[],
-        timestamp: new Date(),
-        metadata: {
-          query: queryText
-        }
-      };
+        query: queryText
+      });
       addMessage(activeConversationId, systemMessage);
       console.log('Added system message to conversation:', activeConversationId, systemMessage);
 
@@ -119,20 +113,16 @@ export const useQueryProcessor = () => {
 
     } catch (error) {
       console.error('Error in processQuery:', error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      addMessage(activeConversationId, {
-        id: uuidv4(),
-        type: 'system',
-        content: `處理查詢時發生錯誤: ${errorMessage}`,
-        timestamp: new Date(),
-        metadata: { error: true }
-      });
+      const errorString = error instanceof Error ? error.message : String(error);
+      
+      const errorMsg = createErrorMessage(error, '處理查詢時發生錯誤');
+      addMessage(activeConversationId, errorMsg);
       setProgress({
         currentStage: 'error',
         percentage: 100,
-        details: `處理查詢時發生錯誤: ${errorMessage}`,
+        details: `處理查詢時發生錯誤: ${errorString}`,
         isProcessing: false,
-        error: errorMessage,
+        error: errorString,
       });
     }
   }, [addMessage, addConversation, setProgress, setSelectedReferences]);
