@@ -68,10 +68,12 @@ class Sentence(Base):
     workspace_id = Column(UUID, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=True)
     content = Column(Text, nullable=False)
     sentence_order = Column(Integer)
+    page_num = Column(Integer)  # 支援頁面定位
     word_count = Column(Integer)
     char_count = Column(Integer)
     
     # 檢測結果欄位
+    defining_type = Column(String(20), default='UNKNOWN')  # OD, CD, OTHER, UNKNOWN
     has_objective = Column(Boolean, default=None)
     has_dataset = Column(Boolean, default=None)
     has_contribution = Column(Boolean, default=None)
@@ -101,7 +103,7 @@ class PaperSelection(Base):
     
     id = Column(UUID, primary_key=True, default=uuid.uuid4)
     paper_id = Column(UUID, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
-    workspace_id = Column(UUID, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=True)
+    workspace_id = Column(UUID, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False)
     is_selected = Column(Boolean, default=True)
     selected_timestamp = Column(TIMESTAMP, default=func.current_timestamp())
     

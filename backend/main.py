@@ -130,6 +130,9 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:3000", 
         "http://127.0.0.1:5173",
+        # Docker 容器環境
+        "http://localhost:20080",
+        "http://127.0.0.1:20080",
         # 生產環境
         "https://chat.hsueh.tw",
         "https://backend.hsueh.tw",

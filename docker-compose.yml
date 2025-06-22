@@ -29,6 +29,7 @@ services:
     ports:
       - "28001:8000"  # 後端 API 服務
     environment:
+      - ENVIRONMENT=development
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=paper_analysis
