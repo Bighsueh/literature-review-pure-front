@@ -183,17 +183,24 @@ const createWorkspaceFileStore = (workspaceId: string) => {
               const response = await workspaceApiService.getPapers();
               
               if (response.success && response.data) {
-                get().setPapers(response.data);
+                // 後端返回的是分頁響應格式，被前端包裝在 ApiResponse 中
+                // response.data 就是 PaginatedResponse<Paper>
+                const papers = response.data.items || [];
+                get().setPapers(papers);
                 set({ isLoading: false });
+                
+                console.log(`✅ 成功載入 ${papers.length} 個檔案`);
               } else {
                 set({ 
                   isLoading: false, 
                   error: response.error || 'Failed to fetch papers' 
                 });
+                console.error('❌ 載入檔案失敗:', response.error);
               }
             } catch (error) {
               const errorMessage = error instanceof Error ? error.message : 'Unknown error';
               set({ isLoading: false, error: errorMessage });
+              console.error('❌ 載入檔案異常:', errorMessage);
             }
           },
           
@@ -280,7 +287,7 @@ export const useWorkspaceFileStore = (workspaceId: string) => {
   if (!workspaceId) {
     // 返回預設的空狀態而不是拋出錯誤
     return {
-      papers: [] as Paper[],
+      papers: [] as Paper[], // 確保始終是陣列
       selectedPaperIds: new Set<string>(),
       processingTasks: {} as Record<string, TaskStatus>,
       uploadingFiles: {} as Record<string, { fileName: string; progress: number }>,
@@ -308,7 +315,13 @@ export const useWorkspaceFileStore = (workspaceId: string) => {
     };
   }
   
-  return getWorkspaceFileStore(workspaceId)();
+  const store = getWorkspaceFileStore(workspaceId)();
+  
+  // 確保 papers 始終是陣列
+  return {
+    ...store,
+    papers: Array.isArray(store.papers) ? store.papers : []
+  };
 };
 
 // Hook：使用當前工作區的檔案 store
