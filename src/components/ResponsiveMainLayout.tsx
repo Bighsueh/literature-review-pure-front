@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { useResponsive } from '../hooks/useResponsive';
-import { useWorkspaceContext } from '../contexts/WorkspaceContext';
+import { useWorkspace } from '../contexts/WorkspaceContext';
 import LeftPanel from './LeftPanel';
 import CenterPanel from './CenterPanel';
 import RightPanel from './RightPanel';
@@ -19,7 +19,7 @@ const ResponsiveMainLayout: React.FC = () => {
   const { ui, setUI } = useAppStore();
   const { files } = useFileStore();
   const { isTablet, isDesktop, isMobile } = useResponsive();
-  const { currentWorkspace } = useWorkspaceContext();
+  const { currentWorkspace } = useWorkspace();
   const [highlightedSentence, setHighlightedSentence] = useState<ProcessedSentence | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>('chat');
   const [navigationItems, setNavigationItems] = useState<NavigationItem[]>(defaultNavigationItems);

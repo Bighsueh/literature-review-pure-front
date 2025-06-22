@@ -20,8 +20,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { CheckIcon as CheckIconSolid } from '@heroicons/react/24/solid';
 import { useWorkspaceFileStore } from '../../stores/workspace/workspaceFileStore';
-import { useWorkspaceContext } from '../../contexts/WorkspaceContext';
-import { Paper } from '../../types/api';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
+import { Paper, WorkspaceFile } from '../../types/api';
 import LoadingSpinner from '../common/LoadingSpinner';
 
 interface WorkspaceFileListProps {
@@ -390,11 +390,11 @@ const FileItem: React.FC<{
 
         {/* 檔案資訊 */}
         <div className="flex-1 min-w-0">
-          <p className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-gray-900 truncate`} title={paper.title}>
-            {paper.title}
+          <p className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-gray-900 truncate`} title={paper.original_filename || paper.file_name}>
+            {paper.original_filename || paper.file_name}
           </p>
           <div className={`${compact ? 'text-xs' : 'text-sm'} text-gray-500 space-y-0.5`}>
-            <p>{formatDate(paper.upload_time)}</p>
+            <p>{formatDate(paper.upload_timestamp)}</p>
             {!compact && paper.file_size && (
               <p>{formatFileSize(paper.file_size)}</p>
             )}
@@ -449,7 +449,7 @@ const WorkspaceFileList: React.FC<WorkspaceFileListProps> = ({
   enableBatchOperations = true,
   compact = false
 }) => {
-  const { currentWorkspace } = useWorkspaceContext();
+  const { currentWorkspace } = useWorkspace();
   const { 
     papers, 
     selectedPaperIds, 
@@ -484,7 +484,7 @@ const WorkspaceFileList: React.FC<WorkspaceFileListProps> = ({
     // 搜尋篩選
     if (searchQuery) {
       filtered = filtered.filter(paper =>
-        paper.title.toLowerCase().includes(searchQuery.toLowerCase())
+        (paper.original_filename || paper.file_name).toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 

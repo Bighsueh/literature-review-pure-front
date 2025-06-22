@@ -1,14 +1,14 @@
 import React from 'react';
 import WorkspaceFileUpload from './file/WorkspaceFileUpload';
 import WorkspaceFileList from './file/WorkspaceFileList';
-import { useWorkspaceContext } from '../contexts/WorkspaceContext';
+import { useWorkspace } from '../contexts/WorkspaceContext';
 
 interface LeftPanelProps {
   onResize?: (newWidth: number) => void;
 }
 
 const LeftPanel: React.FC<LeftPanelProps> = ({ onResize }) => {
-  const { currentWorkspace } = useWorkspaceContext();
+  const { currentWorkspace } = useWorkspace();
   
   const handleResizeStart = (e: React.MouseEvent) => {
     e.preventDefault();

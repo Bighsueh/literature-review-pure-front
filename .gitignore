@@ -138,13 +138,25 @@ backend/backup/
 *_CHECKLIST.md
 *_PLAN.md
 
-# Diagnostic and verification files
+# 診斷和驗證檔案
 diagnose_*.py
+verify_*.py
 test_*.html
 test_*.js
 test_*.mjs
-verify_*.py
 *_verification_report.json
-verification_report_*.json
+*_diagnosis_report.md
 VERIFICATION_GUIDE.md
+FRONTEND_*_REPORT.md
+CRITICAL_ISSUES_FIXED_REPORT.md
+VERIFICATION_SUMMARY.md
+BACKLOG_VERIFICATION_REPORT.md
+IMPLEMENTATION_COMPLETION_REPORT.md
+COMMIT_SUMMARY.md
+FE-*_SUMMARY.md
+FE-*_IMPLEMENTATION_SUMMARY.md
+EMERGENCY_FIX_CHECKLIST.md
+CI_*_REPORT.md
+upload_fix_verification_report.json
+file_list_update_diagnosis_report.md
 
