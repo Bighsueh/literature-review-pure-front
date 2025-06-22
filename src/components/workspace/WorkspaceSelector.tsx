@@ -3,18 +3,18 @@
  */
 
 import React, { useState } from 'react';
-import { useWorkspaceContext } from '../../contexts/WorkspaceContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
 import LoadingSpinner from '../common/LoadingSpinner';
 
 const WorkspaceSelector: React.FC = () => {
   const { 
     workspaces, 
     currentWorkspace,
-    isLoading,
+    loading,
     error,
-    switchWorkspace,
+    selectWorkspace,
     createWorkspace
-  } = useWorkspaceContext();
+  } = useWorkspace();
   
   const [isCreating, setIsCreating] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
@@ -45,15 +45,15 @@ const WorkspaceSelector: React.FC = () => {
     }
   };
 
-  const handleSwitchWorkspace = async (workspaceId: string) => {
+  const handleSelectWorkspace = async (workspaceId: string) => {
     try {
-      await switchWorkspace(workspaceId);
+      await selectWorkspace(workspaceId);
     } catch (error) {
-      console.error('Switch workspace error:', error);
+      console.error('Select workspace error:', error);
     }
   };
 
-  if (isLoading) {
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
@@ -128,7 +128,7 @@ const WorkspaceSelector: React.FC = () => {
               {workspaces.map((workspace) => (
                 <button
                   key={workspace.id}
-                  onClick={() => handleSwitchWorkspace(workspace.id)}
+                  onClick={() => handleSelectWorkspace(workspace.id)}
                   className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-blue-50 hover:border-blue-300 transition-colors"
                 >
                   <div className="font-medium text-gray-900">{workspace.name}</div>
