@@ -126,7 +126,7 @@ export interface UserWithWorkspaces extends User {
 
 // ===== 論文/檔案相關類型 =====
 
-export type ProcessingStatus = 'uploading' | 'processing' | 'completed' | 'error';
+export type ProcessingStatus = 'uploading' | 'pending' | 'processing' | 'completed' | 'error';
 
 export interface Paper {
   id: string;

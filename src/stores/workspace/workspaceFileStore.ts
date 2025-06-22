@@ -9,6 +9,9 @@ import { Paper, TaskStatus, UploadResponse } from '../../types/api';
 import { workspaceApiService } from '../../services/workspace_api_service';
 import { useWorkspaceStore } from './workspaceStore';
 
+// 導入全局 appStore 以整合進度監控
+import { useAppStore } from '../appStore';
+
 // 工作區檔案狀態接口
 interface WorkspaceFileState {
   // 論文/檔案資料
@@ -214,6 +217,14 @@ const createWorkspaceFileStore = (workspaceId: string) => {
               
               if (response.success && response.data) {
                 get().setUploadProgress(uploadId, file.name, 100);
+                
+                // 整合全局進度監控：開始監控檔案處理進度
+                const { paper_id, original_filename } = response.data;
+                if (paper_id) {
+                  // 使用全局 appStore 的進度監控
+                  const globalStore = useAppStore.getState();
+                  globalStore.startPaperMonitoring(paper_id, original_filename || file.name);
+                }
                 
                 setTimeout(() => {
                   get().removeUploadProgress(uploadId);
