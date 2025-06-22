@@ -482,7 +482,37 @@ class WorkspaceApiService {
    */
   async getPaperProcessingStatus(paperId: string): Promise<ApiResponse<PaperProcessingStatus>> {
     const workspaceId = this.requireCurrentWorkspace();
-    return this.authenticatedRequest<PaperProcessingStatus>(`/workspaces/${workspaceId}/files/${paperId}/status`);
+    
+    // 增強錯誤處理：嘗試多個路由
+    const routes = [
+      `/workspaces/${workspaceId}/files/${paperId}/status`, // 首選：工作區範圍的路由
+      `/api/papers/${paperId}/status`, // 備用：全局路由
+      `/api/processing/status/${paperId}` // 最後備用：處理狀態路由
+    ];
+    
+    let lastError = '';
+    
+    for (const route of routes) {
+      try {
+        const response = await this.authenticatedRequest<PaperProcessingStatus>(route);
+        if (response.success) {
+          return response;
+        }
+        lastError = response.error || 'Request failed';
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : 'Unknown error';
+        console.warn(`Route ${route} failed:`, lastError);
+      }
+    }
+    
+    // 如果所有路由都失敗，返回友好的錯誤信息
+    console.error(`All status routes failed for paper ${paperId}. Last error: ${lastError}`);
+    
+    return {
+      success: false,
+      error: `無法獲取檔案處理狀態。這可能是暫時的網路問題，請稍後重試。`,
+      data: undefined
+    };
   }
 
   /**

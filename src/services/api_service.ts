@@ -178,48 +178,114 @@ class ApiService {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
-    try {
-      const url = `${this.baseUrl}${endpoint}`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const url = `${this.baseUrl}${endpoint}`;
+    const defaultHeaders = {
+      'Content-Type': 'application/json',
+    };
 
-      // 預設標頭
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(options.headers as Record<string, string>),
-      };
+    // 增加重試機制
+    const maxRetries = 2;
+    let lastError: string = '';
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-      // 添加認證令牌
-      const token = localStorage.getItem('jwt_token');
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
+        // 添加認證令牌
+        const token = localStorage.getItem('jwt_token');
+        const headers: Record<string, string> = {
+          ...defaultHeaders,
+          ...(options.headers as Record<string, string>),
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const response = await fetch(url, {
+          ...options,
+          headers,
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          // 特殊處理不同的 HTTP 狀態碼
+          let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+          
+          try {
+            const errorData = await response.json();
+            if (errorData.detail) {
+              errorMessage = errorData.detail;
+            } else if (errorData.message) {
+              errorMessage = errorData.message;
+            }
+          } catch {
+            // 無法解析錯誤響應體，使用默認錯誤信息
+          }
+          
+          // 404 錯誤的特殊處理
+          if (response.status === 404) {
+            console.warn(`API 404 for ${endpoint}:`, errorMessage);
+            return {
+              success: false,
+              error: `請求的資源不存在或 API 路由配置錯誤: ${errorMessage}`
+            };
+          }
+          
+          // 500 錯誤的特殊處理
+          if (response.status >= 500) {
+            lastError = `伺服器內部錯誤: ${errorMessage}`;
+            if (attempt < maxRetries) {
+              console.warn(`Server error (attempt ${attempt + 1}/${maxRetries + 1}):`, lastError);
+              await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // 遞增延遲
+              continue;
+            }
+          }
+          
+          return {
+            success: false,
+            error: errorMessage
+          };
+        }
+
+        const data = await response.json();
+        return {
+          success: true,
+          data: data as T
+        };
+
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        lastError = errorMessage;
+        
+        // 網路錯誤或超時的處理
+        if (errorMessage.includes('aborted') || errorMessage.includes('timeout')) {
+          if (attempt < maxRetries) {
+            console.warn(`Request timeout (attempt ${attempt + 1}/${maxRetries + 1}) for ${endpoint}`);
+            await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1))); // 遞增延遲
+            continue;
+          }
+          lastError = '請求超時，請檢查網路連接或稍後重試';
+        } else if (errorMessage.includes('fetch')) {
+          if (attempt < maxRetries) {
+            console.warn(`Network error (attempt ${attempt + 1}/${maxRetries + 1}) for ${endpoint}:`, errorMessage);
+            await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1))); // 遞增延遲
+            continue;
+          }
+          lastError = '網路連接錯誤，請檢查網路連接';
+        }
+        
+        // 其他錯誤不重試
+        break;
       }
-
-      const response = await fetch(url, {
-        ...options,
-        headers,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      return {
-        success: true,
-        data,
-      };
-    } catch (error) {
-      console.error(`API request failed: ${endpoint}`, error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      };
     }
+
+    return {
+      success: false,
+      error: lastError
+    };
   }
 
   // ===== 工作區化檔案操作方法 =====

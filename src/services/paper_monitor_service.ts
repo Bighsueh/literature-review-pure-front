@@ -109,12 +109,38 @@ class PaperMonitorService {
         return { success: true, status: result.data };
       } else {
         const error = result.error || 'API call failed without specific error';
-        this.updateErrorCache(paperId, error);
+        
+        // 特殊處理 404 錯誤：檢查是否是暫時的問題
+        if (error.includes('404') || error.includes('Not Found')) {
+          // 對於 404 錯誤，使用更寬鬆的重試策略
+          console.warn(`Got 404 for ${paperId}, this might be a temporary routing issue`);
+          this.updateErrorCache(paperId, `Temporary routing issue: ${error}`);
+          
+          // 檢查是否連續多次 404（可能是檔案真的不存在）
+          const cached = this.errorCache[paperId];
+          if (cached && cached.errorCount >= 3) {
+            return { 
+              success: false, 
+              error: `檔案可能不存在或已被刪除 (${cached.errorCount} consecutive 404s)` 
+            };
+          }
+        } else {
+          this.updateErrorCache(paperId, error);
+        }
+        
         return { success: false, error };
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      this.updateErrorCache(paperId, errorMessage);
+      
+      // 網路錯誤的特殊處理
+      if (errorMessage.includes('fetch') || errorMessage.includes('network')) {
+        console.warn(`Network error for ${paperId}:`, errorMessage);
+        this.updateErrorCache(paperId, `Network issue: ${errorMessage}`);
+      } else {
+        this.updateErrorCache(paperId, errorMessage);
+      }
+      
       return { success: false, error: errorMessage };
     }
   }
