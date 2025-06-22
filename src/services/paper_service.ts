@@ -3,10 +3,53 @@
  * 整合 API 調用和本地狀態管理，提供高級的論文操作功能
  */
 
-import { apiService, type PaperInfo, type QueryRequest, type QueryResponse } from './api_service';
+import { apiService } from './api_service';
 import { localStorageService } from './localStorageService';
 import { ProcessedSentence, FileMetadata } from '../types/file';
 import { Message } from '../types/chat';
+
+// 類型定義
+interface PaperInfo {
+  id: string;
+  title: string;
+  authors: string[];
+  file_path: string;
+  file_hash: string;
+  upload_time: string;
+  processing_status: string;
+  selected: boolean;
+  section_count: number;
+  sentence_count: number;
+}
+
+interface QueryResponse {
+  response: string;
+  references?: Array<{
+    id: string;
+    paper_name: string;
+    section_type: string;
+    page_num: number;
+    content_snippet: string;
+  }>;
+  selected_sections?: Array<{
+    id: string;
+    section_type: string;
+    content: string;
+  }>;
+  analysis_focus?: string;
+  source_summary?: {
+    total_papers: number;
+    papers_used: string[];
+    sections_analyzed: string[];
+    analysis_type: string;
+  };
+}
+
+interface QueryRequest {
+  query: string;
+  paper_ids?: string[];
+  max_results?: number;
+}
 
 export interface PaperUploadResult {
   success: boolean;
@@ -107,25 +150,37 @@ class PaperService {
       const result = await apiService.getPapers();
       
       if (result.success && result.data) {
-        return result.data;
+        // result.data 是 WorkspaceFile[]，需要轉換為 PaperInfo[]
+        return result.data.map(file => ({
+          id: file.id,
+          title: file.title,
+          authors: [],
+          file_path: file.file_path,
+          file_hash: file.file_hash,
+          upload_time: file.upload_time,
+          processing_status: file.processing_status,
+          selected: file.selected,
+          section_count: file.section_count,
+          sentence_count: file.sentence_count,
+        }));
       }
       
       // 如果 API 失敗，嘗試使用本地資料
       console.warn('API failed, falling back to local data:', result.error);
       const localMetadata = await localStorageService.getAllFileMetadata();
       
-             return localMetadata.map(meta => ({
-         id: meta.id,
-         title: meta.name.replace('.pdf', ''),
-         authors: [],
-         file_path: meta.name,
-         file_hash: '',
-         upload_time: meta.uploadedAt.toISOString(),
-         processing_status: 'pending',
-         selected: false,
-         section_count: 0,
-         sentence_count: 0,
-       }));
+      return localMetadata.map(meta => ({
+        id: meta.id,
+        title: meta.name.replace('.pdf', ''),
+        authors: [],
+        file_path: meta.name,
+        file_hash: '',
+        upload_time: meta.uploadedAt.toISOString(),
+        processing_status: 'pending',
+        selected: false,
+        section_count: 0,
+        sentence_count: 0,
+      }));
     } catch (error) {
       console.error('Error getting papers:', error);
       return [];
@@ -444,7 +499,7 @@ class PaperService {
   async hasAnyCompletedPapers(): Promise<boolean> {
     try {
       const papers = await this.getAllPapers();
-      return papers.some(paper => paper.processing_status === 'completed');
+      return Array.isArray(papers) && papers.some(paper => paper.processing_status === 'completed');
     } catch (error) {
       console.error('Error checking completed papers:', error);
       return false;

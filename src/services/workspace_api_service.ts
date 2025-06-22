@@ -15,7 +15,6 @@ import {
   WorkspaceUpdate,
   UserWithWorkspaces,
   Paper, 
-  PaperCreate, 
   PaperUpdate,
   PaperSelection,
   PaperSelectionUpdate,
@@ -82,6 +81,30 @@ class TokenManager {
   }
 
   static isAuthenticated(): boolean {
+    // 開發模式：如果沒有 token，創建一個假的認證狀態
+    if (import.meta.env.DEV || import.meta.env.VITE_NODE_ENV === 'development') {
+      const token = this.getToken();
+      const user = this.getCurrentUser();
+      
+      // 如果沒有認證資料，創建開發模式的假資料
+      if (!token || !user) {
+        console.warn('🚨 開發模式：使用假認證資料');
+        this.setToken('dev-token-' + Date.now());
+        this.setCurrentUser({
+          id: 'dev-user-id',
+          google_id: 'dev-google-id',
+          email: 'dev@example.com',
+          name: '開發用戶',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+        return true;
+      }
+      
+      return !!(token && user);
+    }
+    
+    // 生產模式：正常驗證
     const token = this.getToken();
     const user = this.getCurrentUser();
     return !!(token && user);
@@ -163,6 +186,41 @@ class WorkspaceApiService {
    * 獲取當前使用者資訊
    */
   async getCurrentUser(): Promise<ApiResponse<UserWithWorkspaces>> {
+    // 開發模式：返回假資料
+    if (import.meta.env.DEV || import.meta.env.VITE_NODE_ENV === 'development') {
+      console.warn('🚨 開發模式：返回假用戶資料');
+      
+      const mockUser: UserWithWorkspaces = {
+        id: 'dev-user-id',
+        google_id: 'dev-google-id',
+        email: 'dev@example.com',
+        name: '開發用戶',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        workspaces: [
+          {
+            id: '1e7a7a7a-5e8d-4b78-a7e9-2536ea9fad64',
+            user_id: 'dev-user-id',
+            name: 'first-chat',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          },
+          {
+            id: '7ddbb7c1-7cc0-4d60-ad3e-c8deed1447ea',
+            user_id: 'dev-user-id',
+            name: 'second-chat',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }
+        ]
+      };
+      
+      return {
+        success: true,
+        data: mockUser
+      };
+    }
+    
     return this.authenticatedRequest<UserWithWorkspaces>('/auth/me');
   }
 
@@ -194,7 +252,34 @@ class WorkspaceApiService {
    * 獲取使用者的所有工作區
    */
   async getWorkspaces(): Promise<ApiResponse<Workspace[]>> {
-    return this.authenticatedRequest<Workspace[]>('/workspaces');
+    // 開發模式：返回假資料
+    if (import.meta.env.DEV || import.meta.env.VITE_NODE_ENV === 'development') {
+      console.warn('🚨 開發模式：返回假工作區資料');
+      
+      const mockWorkspaces: Workspace[] = [
+        {
+          id: '1e7a7a7a-5e8d-4b78-a7e9-2536ea9fad64',
+          user_id: 'dev-user-id',
+          name: 'first-chat',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        },
+        {
+          id: '7ddbb7c1-7cc0-4d60-ad3e-c8deed1447ea',
+          user_id: 'dev-user-id',
+          name: 'second-chat',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }
+      ];
+      
+      return {
+        success: true,
+        data: mockWorkspaces
+      };
+    }
+    
+    return this.authenticatedRequest<Workspace[]>('/workspaces/');
   }
 
   /**
@@ -273,7 +358,7 @@ class WorkspaceApiService {
     const formData = new FormData();
     formData.append('file', file);
 
-    return this.authenticatedRequest<UploadResponse>(`/workspaces/${workspaceId}/files/upload`, {
+    return this.authenticatedRequest<UploadResponse>(`/workspaces/${workspaceId}/files`, {
       method: 'POST',
       body: formData,
       headers: {} // 讓瀏覽器自動設定 Content-Type
@@ -281,11 +366,11 @@ class WorkspaceApiService {
   }
 
   /**
-   * 獲取工作區的所有論文
+   * 獲取工作區檔案列表
    */
-  async getPapers(): Promise<ApiResponse<Paper[]>> {
+  async getPapers(): Promise<ApiResponse<PaginatedResponse<Paper>>> {
     const workspaceId = this.requireCurrentWorkspace();
-    return this.authenticatedRequest<Paper[]>(`/workspaces/${workspaceId}/files`);
+    return this.authenticatedRequest<PaginatedResponse<Paper>>(`/workspaces/${workspaceId}/files`);
   }
 
   /**
@@ -536,7 +621,7 @@ class WorkspaceApiService {
               }
             });
           }
-        } catch (refreshError) {
+        } catch {
           // 刷新失敗，清除認證資料並重導向到登入頁面
           TokenManager.clearAuth();
           window.location.href = '/login';

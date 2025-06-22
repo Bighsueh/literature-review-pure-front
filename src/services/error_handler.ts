@@ -348,8 +348,25 @@ if (typeof window !== 'undefined') {
   });
 
   window.addEventListener('unhandledrejection', (event) => {
-    errorHandler.handleError(new Error(event.reason), {
-      type: 'unhandledPromiseRejection'
+    // 安全地處理 event.reason，可能是任何類型
+    const errorMessage = 'Unhandled Promise Rejection';
+    let originalError: Error;
+    
+    if (event.reason instanceof Error) {
+      originalError = event.reason;
+    } else if (typeof event.reason === 'string') {
+      originalError = new Error(event.reason);
+    } else if (event.reason && typeof event.reason === 'object') {
+      // 嘗試從物件中提取錯誤訊息
+      const message = event.reason.message || event.reason.toString() || errorMessage;
+      originalError = new Error(message);
+    } else {
+      originalError = new Error(errorMessage);
+    }
+    
+    errorHandler.handleError(originalError, {
+      type: 'unhandledPromiseRejection',
+      originalReason: event.reason
     });
   });
 }
