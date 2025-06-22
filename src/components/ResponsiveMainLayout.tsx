@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { useResponsive } from '../hooks/useResponsive';
-import { useWorkspace } from '../contexts/WorkspaceContext';
+// import { useWorkspace } from '../contexts/WorkspaceContext';
 import LeftPanel from './LeftPanel';
 import CenterPanel from './CenterPanel';
 import RightPanel from './RightPanel';
 import Modal from './common/Modal/Modal';
 import WelcomeTour from './onboarding/WelcomeTour';
 import ResponsiveNavigation, { defaultNavigationItems, NavigationItem } from './common/ResponsiveNavigation';
-import WorkspaceSwitcher from './workspace/WorkspaceSwitcher';
+// import WorkspaceSwitcher from './workspace/WorkspaceSwitcher';
 import { useFileStore } from '../stores/fileStore';
 import { ProcessedSentence } from '../types/file';
 import { paperService } from '../services/paper_service';
+import ProgressDisplay from './progress/ProgressDisplay/ProgressDisplay';
+import ActiveTasksDisplay from './progress/ActiveTasksDisplay/ActiveTasksDisplay';
 
 type ActivePanel = 'files' | 'chat' | 'progress';
 
@@ -19,7 +21,7 @@ const ResponsiveMainLayout: React.FC = () => {
   const { ui, setUI } = useAppStore();
   const { files } = useFileStore();
   const { isTablet, isDesktop, isMobile } = useResponsive();
-  const { currentWorkspace } = useWorkspace();
+  // const { currentWorkspace } = useWorkspace();
   const [highlightedSentence, setHighlightedSentence] = useState<ProcessedSentence | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>('chat');
   const [navigationItems, setNavigationItems] = useState<NavigationItem[]>(defaultNavigationItems);
@@ -245,7 +247,16 @@ const ResponsiveMainLayout: React.FC = () => {
         {/* Progress Panel */}
         <div className="h-full flex-shrink-0 overflow-hidden bg-white" style={{ width: '100vw' }}>
           <div className="h-full w-full">
-            <RightPanel onResize={handleRightPanelResize} />
+            <div className="flex flex-col h-full bg-gray-50">
+              <div className="p-4 border-b bg-white">
+                <h2 className="text-lg font-medium text-gray-900">處理進度</h2>
+                <p className="text-sm text-gray-600 mt-1">檔案上傳和處理狀態</p>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <ProgressDisplay />
+                <ActiveTasksDisplay />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -343,7 +354,18 @@ const ResponsiveMainLayout: React.FC = () => {
             <div className="flex-1 h-full flex flex-col pl-16">
               {activePanel === 'files' && <LeftPanel onResize={handleLeftPanelResize} />}
               {activePanel === 'chat' && <CenterPanel onReferenceClick={handleReferenceClick} />}
-              {activePanel === 'progress' && <RightPanel onResize={handleRightPanelResize} />}
+              {activePanel === 'progress' && (
+                <div className="flex flex-col h-full bg-gray-50">
+                  <div className="p-4 border-b bg-white">
+                    <h2 className="text-lg font-medium text-gray-900">處理進度</h2>
+                    <p className="text-sm text-gray-600 mt-1">檔案上傳和處理狀態</p>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    <ProgressDisplay />
+                    <ActiveTasksDisplay />
+                  </div>
+                </div>
+              )}
             </div>
             
             {/* 右側可能的輔助面板 */}

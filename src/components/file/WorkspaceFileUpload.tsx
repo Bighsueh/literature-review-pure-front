@@ -175,6 +175,8 @@ const WorkspaceFileUpload: React.FC<WorkspaceFileUploadProps> = ({
                 : qItem
             )
           );
+          
+          console.log(`✅ 檔案上傳成功: ${item.file.name}, Paper ID: ${result.paper_id}`);
         } else {
           // 上傳失敗
           setUploadQueue(prev => 
