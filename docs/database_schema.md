@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文檔描述論文分析系統的完整資料庫結構，已更新以反映**多工作區架構**的重大變更（更新日期：2025-01-12）。
+本文檔描述論文分析系統的完整資料庫結構（**2025-06-22** 版），內容來源於目前執行中的 PostgreSQL。
 
 ## 資料庫資訊
 
@@ -174,7 +174,7 @@ CREATE INDEX idx_paper_sections_workspace_id ON paper_sections(workspace_id);
 CREATE INDEX idx_paper_sections_workspace_section_type ON paper_sections(workspace_id, section_type);
 ```
 
-### 6. sentences (句子表) ✏️ 已更新
+### 6. sentences (句子表) ✏️ 再次更新（2025-06-22）
 
 從論文章節中提取的句子及其分析結果，已加入工作區支援。
 
@@ -198,6 +198,10 @@ CREATE TABLE sentences (
     retry_count INTEGER DEFAULT 0,
     explanation TEXT,
     
+    -- 新增欄位
+    defining_type VARCHAR(20) DEFAULT 'UNKNOWN', -- 可能值: 'OD', 'CD', 'UNKNOWN'
+    page_num INTEGER,
+    
     -- 時間戳
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -210,7 +214,11 @@ CREATE TABLE sentences (
 **索引**:
 ```sql
 CREATE INDEX idx_sentences_workspace_id ON sentences(workspace_id);
-CREATE INDEX idx_sentences_workspace_detection_status ON sentences(workspace_id, detection_status);
+CREATE INDEX idx_sentences_paper_section ON sentences(paper_id, section_id);
+CREATE INDEX idx_sentences_detection_status ON sentences(detection_status);
+CREATE INDEX idx_sentences_defining_type ON sentences(defining_type);
+CREATE INDEX idx_sentences_page_num ON sentences(page_num);
+CREATE INDEX idx_sentences_text_search ON sentences USING GIN (to_tsvector('english', content));
 ```
 
 ### 7. paper_selections (論文選擇表) ✏️ 已更新

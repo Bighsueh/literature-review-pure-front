@@ -1,8 +1,8 @@
 # API 文檔
 
-## 概述
+## 概述 (更新：2025-06-22)
 
-論文分析系統提供 RESTful API，支援論文上傳、處理狀態查詢、內容分析等功能。
+論文分析系統提供 RESTful API，支援論文與工作區管理、對話查詢、內容分析等功能。
 
 ## 基本資訊
 
@@ -139,9 +139,77 @@ GET /api/papers/?status=completed&limit=10&offset=0
 }
 ```
 
-### 2. 章節管理
+### 2. 工作區管理
 
-#### 2.1 獲取論文章節
+#### 2.1 建立工作區
+
+**端點**: `POST /workspaces/`
+
+**描述**: 建立新的工作區，並回傳工作區 ID。
+
+**請求格式**:
+```json
+{
+  "name": "My First Workspace"
+}
+```
+
+**響應格式**:
+```json
+{
+  "id": "2e0e2b8a-1111-4eae-a121-3a228d42123f",
+  "name": "My First Workspace",
+  "created_at": "2025-06-22T08:30:00Z"
+}
+```
+
+#### 2.2 列出工作區
+
+**端點**: `GET /workspaces/`
+
+**描述**: 取得目前使用者擁有的所有工作區。
+
+**響應格式**:
+```json
+[
+  {
+    "id": "2e0e2b8a-1111-4eae-a121-3a228d42123f",
+    "name": "My First Workspace",
+    "created_at": "2025-06-22T08:30:00Z"
+  }
+]
+```
+
+#### 2.3 刪除工作區
+
+**端點**: `DELETE /workspaces/{workspace_id}`
+
+### 3. 聊天記錄
+
+#### 3.1 建立訊息
+
+**端點**: `POST /chats/`
+
+**描述**: 在指定工作區內新增聊天訊息。
+
+**請求格式**:
+```json
+{
+  "workspace_id": "2e0e2b8a-1111-4eae-a121-3a228d42123f",
+  "role": "user",
+  "content": "請比較 adaptive expertise 的定義"
+}
+```
+
+#### 3.2 取得聊天記錄
+
+**端點**: `GET /chats/{workspace_id}`
+
+**描述**: 取得特定工作區的聊天歷史，支援分頁。
+
+### 4. 章節管理
+
+#### 4.1 獲取論文章節
 
 **端點**: `GET /papers/{paper_id}/sections`
 
@@ -179,7 +247,7 @@ GET /api/papers/?status=completed&limit=10&offset=0
 }
 ```
 
-#### 2.2 獲取章節詳情
+#### 4.2 獲取章節詳情
 
 **端點**: `GET /sections/{section_id}`
 
@@ -203,9 +271,9 @@ GET /api/papers/?status=completed&limit=10&offset=0
 }
 ```
 
-### 3. 句子分析
+### 5. 句子分析
 
-#### 3.1 獲取論文句子
+#### 5.1 獲取論文句子
 
 **端點**: `GET /papers/{paper_id}/sentences`
 
@@ -251,7 +319,7 @@ GET /api/papers/d5e0ad48-c188-45b4-8408-9e975105f863/sentences?has_objective=tru
 }
 ```
 
-#### 3.2 搜尋句子
+#### 5.2 搜尋句子
 
 **端點**: `GET /sentences/search`
 
@@ -293,9 +361,9 @@ GET /api/sentences/search?q=machine%20learning&section_types=introduction,method
 }
 ```
 
-### 4. 論文選擇
+### 6. 論文選擇
 
-#### 4.1 選擇論文
+#### 6.1 選擇論文
 
 **端點**: `POST /papers/{paper_id}/select`
 
@@ -312,7 +380,7 @@ GET /api/sentences/search?q=machine%20learning&section_types=introduction,method
 }
 ```
 
-#### 4.2 取消選擇論文
+#### 6.2 取消選擇論文
 
 **端點**: `DELETE /papers/{paper_id}/select`
 
@@ -329,7 +397,7 @@ GET /api/sentences/search?q=machine%20learning&section_types=introduction,method
 }
 ```
 
-#### 4.3 獲取選中論文
+#### 6.3 獲取選中論文
 
 **端點**: `GET /papers/selected`
 
@@ -353,9 +421,9 @@ GET /api/sentences/search?q=machine%20learning&section_types=introduction,method
 }
 ```
 
-### 5. 統計分析
+### 7. 統計分析
 
-#### 5.1 獲取系統統計
+#### 7.1 獲取系統統計
 
 **端點**: `GET /stats/system`
 
@@ -377,7 +445,7 @@ GET /api/sentences/search?q=machine%20learning&section_types=introduction,method
 }
 ```
 
-#### 5.2 獲取論文統計
+#### 7.2 獲取論文統計
 
 **端點**: `GET /papers/{paper_id}/stats`
 
@@ -413,9 +481,9 @@ GET /api/sentences/search?q=machine%20learning&section_types=introduction,method
 }
 ```
 
-### 6. 處理狀態
+### 8. 處理狀態
 
-#### 6.1 獲取處理狀態
+#### 8.1 獲取處理狀態
 
 **端點**: `GET /papers/{paper_id}/status`
 

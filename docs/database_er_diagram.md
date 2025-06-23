@@ -2,7 +2,7 @@
 
 ## 實體關係圖 (Entity Relationship Diagram)
 
-以下是論文分析系統多工作區架構遷移後的完整資料庫實體關係圖（更新日期：2025-01-12）：
+以下為 **2025-06-22** 版最新資料庫實體關係圖（同步自執行中 PostgreSQL）。
 
 ```mermaid
 erDiagram
@@ -79,6 +79,8 @@ erDiagram
         boolean has_dataset
         boolean has_contribution
         varchar detection_status
+        varchar defining_type
+        integer page_num
         text error_message
         integer retry_count
         text explanation

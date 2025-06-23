@@ -1,6 +1,6 @@
 # API 配置系統說明
 
-## 概述
+## 概述 (更新：2025-06-22)
 
 本系統採用環境變量配置方式，允許您靈活設置後端 API 地址和其他相關配置，無需修改代碼即可適應不同的部署環境。
 
@@ -28,14 +28,15 @@
 | `VITE_API_TIMEOUT` | `30000` | API 請求超時時間（毫秒） |
 | `VITE_SPLIT_SENTENCES_BASE_URL` | `http://localhost:28000` | Split Sentences 服務地址 |
 | `VITE_DEBUG_MODE` | `false` | 開發除錯模式 |
+| `VITE_GOOGLE_OAUTH_CLIENT_ID` | － | Google OAuth Client ID，用於前端登入 |
 
 ### 功能開關
 
 | 變量名 | 預設值 | 說明 |
 |--------|--------|------|
-| `VITE_USE_UNIFIED_QUERY` | `false` | 是否使用統一查詢系統 |
-| `VITE_USE_UNIFIED_FILE_PROCESSOR` | `false` | 是否使用統一檔案處理系統 |
-| `VITE_DISABLE_DIRECT_N8N` | `false` | 是否禁用直接 N8N 調用 |
+| `VITE_USE_UNIFIED_QUERY` | `true` | 是否啟用整合式查詢 (後端統合) |
+| `VITE_ENABLE_JWT_AUTH` | `true` | 是否啟用 JWT 認證流程 |
+| `VITE_DISABLE_DIRECT_N8N` | `false` | 是否禁用前端直接呼叫 n8n |
 
 ## 使用方法
 
