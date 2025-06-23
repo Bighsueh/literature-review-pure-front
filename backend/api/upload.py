@@ -4,6 +4,8 @@ from typing import Dict, Any, List
 import asyncio
 from datetime import datetime
 import os
+import warnings
+from functools import wraps
 
 from ..core.database import get_db
 from ..services.file_service import file_service
@@ -17,6 +19,23 @@ logger = get_logger("upload")
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
+# 添加棄用裝飾器
+def deprecated_endpoint(message: str):
+    """標記端點為已棄用"""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            warnings.warn(message, DeprecationWarning, stacklevel=2)
+            response = await func(*args, **kwargs)
+            # 添加棄用標頭
+            if hasattr(response, 'headers'):
+                response.headers["X-Deprecated-Endpoint"] = "true"
+                response.headers["X-Deprecated-Message"] = message
+                response.headers["X-Migration-Info"] = "請遷移至 /api/workspaces/{workspace_id}/files/ 端點"
+            return response
+        return wrapper
+    return decorator
+
 # 處理管道函數
 # ❌ 移除 process_paper_pipeline 函數
 # 這個函數已被移除，因為processing_service已經提供了相同功能
@@ -24,15 +43,24 @@ router = APIRouter(prefix="/upload", tags=["upload"])
 # ===== 檔案上傳 =====
 
 @router.post("/", response_model=Dict[str, Any])
+@deprecated_endpoint("此端點已棄用，請使用工作區化的檔案上傳 API")
 async def upload_file(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    上傳PDF檔案
+    上傳PDF檔案 (已棄用)
+    
+    ⚠️ 此端點已棄用，請使用 POST /api/workspaces/{workspace_id}/files/
     """
     try:
-        # 1. 驗證檔案
+        # 為使用舊端點的用戶自動創建 "Default Workspace"
+        # 這需要實現用戶識別和預設工作區邏輯
+        
+        # 記錄棄用使用情況
+        logger.warning("使用了已棄用的檔案上傳端點: /api/upload/")
+        
+        # 原有邏輯保持不變，但添加棄用提示
         is_valid, error_message = await file_service.validate_file(file)
         if not is_valid:
             raise HTTPException(
@@ -40,26 +68,25 @@ async def upload_file(
                 detail=error_message
             )
         
-        # 2. 計算檔案雜湊值
         file_hash = await file_service.calculate_file_hash(file)
-        
-        # 3. 檢查是否為重複檔案
         existing_paper = await db_service.get_paper_by_hash(db, file_hash)
+        
         if existing_paper:
-            return {
+            response_data = {
                 "success": True,
                 "duplicate": True,
                 "message": "檔案已存在",
                 "paper_id": str(existing_paper.id),
                 "existing_filename": existing_paper.file_name,
-                "original_filename": file.filename
+                "original_filename": file.filename,
+                "deprecation_warning": "⚠️ 此API已棄用，請遷移至工作區化檔案上傳 API",
+                "migration_guide": "使用 POST /api/workspaces/{workspace_id}/files/ 來上傳檔案"
             }
+            return response_data
         
-        # 4. 儲存暫存檔案
         file_path, internal_filename = await file_service.save_temp_file(file, file_hash)
         file_size = file_service.get_file_size(file_path)
         
-        # 5. 建立論文記錄
         paper_data = PaperCreate(
             file_name=internal_filename,
             original_filename=file.filename,
@@ -68,36 +95,34 @@ async def upload_file(
         )
         
         paper_id = await db_service.create_paper(db, paper_data)
-        
-        # 6. 加入處理佇列 - 由processing_service自動處理
-        
-        # 7. 自動選取新上傳的論文
         await db_service.mark_paper_selected(db, paper_id)
         
-        # ✅ 8. 使用正式的處理服務 (而非直接處理)
         from ..services.processing_service import processing_service
         task_id = await processing_service.process_file(
             file_id=paper_id,
-            user_id=None,  # 如果沒有用戶系統就用None
-            priority=TaskPriority.HIGH,  # 上傳的檔案給高優先級
+            user_id=None,
+            priority=TaskPriority.HIGH,
             options={
                 "detect_od_cd": True,
-                "extract_keywords": False,  # 根據流程圖，上傳不包含關鍵詞提取
+                "extract_keywords": False,
                 "auto_cleanup": True
             }
         )
         
-        return {
+        response_data = {
             "success": True,
             "duplicate": False,
             "message": "檔案上傳成功，正在處理中",
             "paper_id": paper_id,
-            "task_id": task_id,  # 提供task_id用於進度追蹤
+            "task_id": task_id,
             "filename": internal_filename,
             "original_filename": file.filename,
             "file_size": file_size,
-            "file_hash": file_hash
+            "file_hash": file_hash,
+            "deprecation_warning": "⚠️ 此API已棄用，請遷移至工作區化檔案上傳 API",
+            "migration_guide": "使用 POST /api/workspaces/{workspace_id}/files/ 來上傳檔案"
         }
+        return response_data
         
     except HTTPException:
         raise
@@ -108,18 +133,24 @@ async def upload_file(
         )
 
 @router.post("/batch", response_model=Dict[str, Any])
+@deprecated_endpoint("此批次上傳端點已棄用，請使用工作區化的檔案上傳 API")
 async def upload_multiple_files(
     files: List[UploadFile] = File(...),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    批次上傳多個PDF檔案
+    批次上傳多個PDF檔案 (已棄用)
+    
+    ⚠️ 此端點已棄用，請使用 POST /api/workspaces/{workspace_id}/files/batch
     """
+    logger.warning("使用了已棄用的批次上傳端點: /api/upload/batch")
+    
+    # 原有邏輯保持不變，只添加棄用警告
     try:
         results = []
         total_files = len(files)
         
-        if total_files > 10:  # 限制批次上傳數量
+        if total_files > 10:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="批次上傳最多支援10個檔案"
@@ -127,7 +158,6 @@ async def upload_multiple_files(
         
         for i, file in enumerate(files):
             try:
-                # 1. 驗證檔案
                 is_valid, error_message = await file_service.validate_file(file)
                 if not is_valid:
                     results.append({
@@ -137,11 +167,9 @@ async def upload_multiple_files(
                     })
                     continue
                 
-                # 2. 計算檔案雜湊值
                 file_hash = await file_service.calculate_file_hash(file)
-                
-                # 3. 檢查是否為重複檔案
                 existing_paper = await db_service.get_paper_by_hash(db, file_hash)
+                
                 if existing_paper:
                     results.append({
                         "filename": file.filename,
@@ -152,11 +180,9 @@ async def upload_multiple_files(
                     })
                     continue
                 
-                # 4. 儲存暫存檔案
                 file_path, internal_filename = await file_service.save_temp_file(file, file_hash)
                 file_size = file_service.get_file_size(file_path)
                 
-                # 5. 建立論文記錄
                 paper_data = PaperCreate(
                     file_name=internal_filename,
                     original_filename=file.filename,
@@ -165,21 +191,16 @@ async def upload_multiple_files(
                 )
                 
                 paper_id = await db_service.create_paper(db, paper_data)
-                
-                # 6. 加入處理佇列 - 由processing_service自動處理
-                
-                # 7. 自動選取新上傳的論文
                 await db_service.mark_paper_selected(db, paper_id)
                 
-                # ✅ 8. 使用processing_service處理檔案
                 from ..services.processing_service import processing_service
                 task_id = await processing_service.process_file(
                     file_id=paper_id,
                     user_id=None,
-                    priority=TaskPriority.NORMAL,  # 批量上傳使用一般優先級
+                    priority=TaskPriority.NORMAL,
                     options={
                         "detect_od_cd": True,
-                        "extract_keywords": False,  # 根據流程圖，上傳不包含關鍵詞提取
+                        "extract_keywords": False,
                         "auto_cleanup": True
                     }
                 )
@@ -189,7 +210,7 @@ async def upload_multiple_files(
                     "success": True,
                     "duplicate": False,
                     "paper_id": paper_id,
-                    "task_id": task_id,  # 提供task_id用於進度追蹤
+                    "task_id": task_id,
                     "internal_filename": internal_filename,
                     "file_size": file_size
                 })
@@ -201,7 +222,6 @@ async def upload_multiple_files(
                     "error": str(e)
                 })
         
-        # 統計結果
         successful_uploads = sum(1 for r in results if r["success"] and not r.get("duplicate", False))
         duplicates = sum(1 for r in results if r.get("duplicate", False))
         failures = sum(1 for r in results if not r["success"])
@@ -212,7 +232,9 @@ async def upload_multiple_files(
             "successful_uploads": successful_uploads,
             "duplicates": duplicates,
             "failures": failures,
-            "results": results
+            "results": results,
+            "deprecation_warning": "⚠️ 此API已棄用，請遷移至工作區化批次上傳 API",
+            "migration_guide": "使用 POST /api/workspaces/{workspace_id}/files/batch 來批次上傳檔案"
         }
         
     except HTTPException:

@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../stores/appStore';
 import { useResponsive } from '../hooks/useResponsive';
+import { useWorkspaceContext } from '../contexts/WorkspaceContext';
 import LeftPanel from './LeftPanel';
 import CenterPanel from './CenterPanel';
 import RightPanel from './RightPanel';
 import Modal from './common/Modal/Modal';
 import WelcomeTour from './onboarding/WelcomeTour';
 import ResponsiveNavigation, { defaultNavigationItems, NavigationItem } from './common/ResponsiveNavigation';
+import WorkspaceSwitcher from './workspace/WorkspaceSwitcher';
 import { useFileStore } from '../stores/fileStore';
 import { ProcessedSentence } from '../types/file';
 import { paperService } from '../services/paper_service';
@@ -17,6 +19,7 @@ const ResponsiveMainLayout: React.FC = () => {
   const { ui, setUI } = useAppStore();
   const { files } = useFileStore();
   const { isTablet, isDesktop, isMobile } = useResponsive();
+  const { currentWorkspace } = useWorkspaceContext();
   const [highlightedSentence, setHighlightedSentence] = useState<ProcessedSentence | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>('chat');
   const [navigationItems, setNavigationItems] = useState<NavigationItem[]>(defaultNavigationItems);
@@ -292,12 +295,6 @@ const ResponsiveMainLayout: React.FC = () => {
   if (isDesktop) {
     return (
       <div className="flex flex-col h-screen bg-gray-100">
-        <ResponsiveNavigation 
-          items={navigationItems}
-          onItemClick={handleNavigationClick}
-          currentPanel={activePanel}
-        />
-        
         <div className="flex flex-1 overflow-hidden">
           {/* Left Panel - File Management */}
           <div 

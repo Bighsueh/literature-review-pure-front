@@ -18,177 +18,149 @@ from ..database.connection import db_manager
 from ..simplified_migration import migration_manager
 from ..core.logging import get_logger
 from ..core.config import get_settings
+from ..core.observability import observability
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/health", tags=["健康檢查"])
 
-@router.get("/")
-async def basic_health_check():
+@router.get("/", response_model=Dict[str, Any])
+async def health_check():
     """基本健康檢查"""
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "service": "Paper Analysis API"
+        "timestamp": datetime.now().isoformat(),
+        "service": "學術研究管理平台後端",
+        "version": "1.0.0"
     }
 
-@router.get("/detailed")
+@router.get("/detailed", response_model=Dict[str, Any])
 async def detailed_health_check():
-    """詳細健康檢查"""
-    
-    health_data = {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "service": "Paper Analysis API",
+    """詳細健康檢查，包含系統指標和可觀測性資料"""
+    try:
+        # 取得完整的可觀測性資料
+        observability_data = await observability.get_observability_data()
+        
+        return {
+            "service": "學術研究管理平台後端",
         "version": "1.0.0",
-        "checks": {}
-    }
-    
-    overall_healthy = True
-    
-    # 1. 資料庫連接檢查
-    try:
-        start_time = time.time()
-        async with db_manager.get_async_session() as session:
-            await session.execute(text("SELECT 1"))
-        
-        db_response_time = (time.time() - start_time) * 1000
-        
-        health_data["checks"]["database"] = {
-            "status": "healthy",
-            "response_time_ms": round(db_response_time, 2),
-            "message": "資料庫連接正常"
-        }
-    except Exception as e:
-        overall_healthy = False
-        health_data["checks"]["database"] = {
-            "status": "unhealthy",
-            "error": str(e),
-            "message": "資料庫連接失敗"
-        }
-    
-    # 2. 資料庫連接檢查（簡化版）
-    try:
-        connection_ok = await migration_manager.check_database_connection()
-        
-        if connection_ok:
-            health_data["checks"]["schema"] = {
-                "status": "healthy",
-                "message": "資料庫連接正常"
-            }
-        else:
-            overall_healthy = False
-            health_data["checks"]["schema"] = {
-                "status": "unhealthy",
-                "message": "資料庫連接失敗"
-            }
-            
-    except Exception as e:
-        overall_healthy = False
-        health_data["checks"]["schema"] = {
-            "status": "error",
-            "error": str(e),
-            "message": "資料庫狀態檢查失敗"
-        }
-    
-    # 3. 遷移狀態檢查
-    try:
-        current_rev = migration_manager.get_current_revision()
-        head_rev = migration_manager.get_head_revision()
-        
-        health_data["checks"]["migrations"] = {
-            "status": "healthy" if current_rev == head_rev else "warning",
-            "current_revision": current_rev,
-            "head_revision": head_rev,
-            "up_to_date": current_rev == head_rev,
-            "message": "遷移狀態正常" if current_rev == head_rev else "有待應用的遷移"
-        }
-        
-        if current_rev != head_rev:
-            overall_healthy = False
-            
-    except Exception as e:
-        overall_healthy = False
-        health_data["checks"]["migrations"] = {
-            "status": "unhealthy",
-            "error": str(e),
-            "message": "遷移狀態檢查失敗"
-        }
-    
-    # 4. 系統資源檢查
-    try:
-        memory = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
-        
-        health_data["checks"]["system_resources"] = {
-            "status": "healthy",
-            "memory": {
-                "total_gb": round(memory.total / (1024**3), 2),
-                "available_gb": round(memory.available / (1024**3), 2),
-                "percent_used": memory.percent
+            "status": observability_data['health']['status'],
+            "timestamp": observability_data['timestamp'],
+            "health_checks": observability_data['health']['checks'],
+            "system_metrics": {
+                "cpu_percent": observability_data['metrics']['gauges'].get('system_cpu_percent', 0),
+                "memory_percent": observability_data['metrics']['gauges'].get('system_memory_percent', 0),
+                "disk_percent": observability_data['metrics']['gauges'].get('system_disk_percent', 0),
             },
-            "disk": {
-                "total_gb": round(disk.total / (1024**3), 2),
-                "free_gb": round(disk.free / (1024**3), 2),
-                "percent_used": round((disk.used / disk.total) * 100, 2)
+            "performance": {
+                "active_requests": len(observability_data['active_requests']),
+                "total_requests": sum(observability_data['metrics']['counters'].values()) if observability_data['metrics']['counters'] else 0,
             },
-            "message": "系統資源正常"
+            "system_info": observability_data['system_info']
         }
         
-        # 警告閾值檢查
-        if memory.percent > 85 or disk.percent > 85:
-            health_data["checks"]["system_resources"]["status"] = "warning"
-            health_data["checks"]["system_resources"]["message"] = "系統資源使用率較高"
-            
     except Exception as e:
-        health_data["checks"]["system_resources"] = {
-            "status": "error",
-            "error": str(e),
-            "message": "系統資源檢查失敗"
+        logger.error(f"詳細健康檢查失敗: {str(e)}")
+        return {
+            "service": "學術研究管理平台後端",
+            "version": "1.0.0",
+            "status": "unhealthy",
+            "timestamp": datetime.now().isoformat(),
+            "error": str(e)
         }
-    
-    # 5. 檔案系統檢查
+
+@router.get("/metrics", response_model=Dict[str, Any])
+async def get_metrics():
+    """取得系統指標"""
     try:
-        settings = get_settings()
-        temp_dir = settings.temp_files_dir
+        # 收集最新的系統指標
+        observability.system_monitor.collect_system_metrics()
         
-        # 檢查暫存目錄是否存在且可寫
-        if os.path.exists(temp_dir) and os.access(temp_dir, os.W_OK):
-            # 計算暫存目錄大小
-            total_size = 0
-            file_count = 0
-            for dirpath, dirnames, filenames in os.walk(temp_dir):
-                for filename in filenames:
-                    filepath = os.path.join(dirpath, filename)
-                    if os.path.exists(filepath):
-                        total_size += os.path.getsize(filepath)
-                        file_count += 1
-            
-            health_data["checks"]["file_system"] = {
-                "status": "healthy",
-                "temp_dir": temp_dir,
-                "temp_files_count": file_count,
-                "temp_files_size_mb": round(total_size / (1024**2), 2),
-                "message": "檔案系統正常"
-            }
-        else:
-            overall_healthy = False
-            health_data["checks"]["file_system"] = {
-                "status": "unhealthy",
-                "temp_dir": temp_dir,
-                "message": "暫存目錄不存在或不可寫"
+        # 返回指標資料
+        metrics = observability.metrics_collector.get_metrics()
+        
+        return {
+            "success": True,
+            "metrics": metrics,
+            "timestamp": datetime.now().isoformat()
             }
             
     except Exception as e:
-        health_data["checks"]["file_system"] = {
-            "status": "error",
+        logger.error(f"取得指標失敗: {str(e)}")
+        return {
+            "success": False,
             "error": str(e),
-            "message": "檔案系統檢查失敗"
+            "timestamp": datetime.now().isoformat()
         }
-    
-    # 設置整體狀態
-    health_data["status"] = "healthy" if overall_healthy else "unhealthy"
-    
-    return health_data
+
+@router.get("/performance", response_model=Dict[str, Any])
+async def get_performance_stats():
+    """取得效能統計"""
+    try:
+        active_requests = observability.performance_monitor.get_active_requests()
+        metrics = observability.metrics_collector.get_metrics()
+        
+        # 計算效能統計
+        request_counts = {}
+        error_counts = {}
+        response_times = {}
+        
+        for key, value in metrics['counters'].items():
+            if 'http_requests_total' in key:
+                request_counts[key] = value
+            elif 'http_errors_total' in key:
+                error_counts[key] = value
+                
+        for key, values in metrics['histograms'].items():
+            if 'http_request_duration_seconds' in key:
+                if values:
+                    durations = [v['value'] for v in values]
+                    response_times[key] = {
+                        'count': len(durations),
+                        'avg': sum(durations) / len(durations),
+                        'min': min(durations),
+                        'max': max(durations),
+                        'p95': sorted(durations)[int(len(durations) * 0.95)] if durations else 0
+                    }
+        
+        return {
+            "success": True,
+            "active_requests": {
+                "count": len(active_requests),
+                "requests": active_requests
+            },
+            "request_counts": request_counts,
+            "error_counts": error_counts,
+            "response_times": response_times,
+            "timestamp": datetime.now().isoformat()
+        }
+            
+    except Exception as e:
+        logger.error(f"取得效能統計失敗: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+@router.post("/metrics/reset")
+async def reset_metrics():
+    """重設指標 (僅用於測試環境)"""
+    try:
+        observability.metrics_collector.reset_metrics()
+        
+        return {
+            "success": True,
+            "message": "指標已重設",
+            "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        logger.error(f"重設指標失敗: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @router.get("/database")
 async def database_health():

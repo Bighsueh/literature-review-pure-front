@@ -108,7 +108,6 @@ docs/test*.txt
 docs/modified_*.pdf
 docs/new_*.txt
 .env.backup
-docs/system_architecture.md
 
 # Thesis specific files
 DEPLOYMENT.md
@@ -119,3 +118,23 @@ force_init_database.py
 
 # Backup directory for old migration files
 backend/backup/
+
+# Backup files
+*.backup
+
+# JS Test files
+*.test.js
+*.test.jsx
+*.test.ts
+*.test.tsx
+*.spec.js
+*.spec.jsx
+*.spec.ts
+*.spec.tsx
+
+# Project management files
+*_REPORT.md
+*_SUMMARY.md
+*_CHECKLIST.md
+*_PLAN.md
+

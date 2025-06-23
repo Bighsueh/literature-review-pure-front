@@ -5,6 +5,7 @@ import uuid
 from typing import Optional, Tuple, Dict, Any, List
 from pathlib import Path
 from datetime import datetime, timedelta
+from uuid import UUID
 from fastapi import UploadFile
 try:
     import magic
@@ -126,6 +127,215 @@ class FileService:
         except Exception as e:
             logger.error(f"儲存暫存檔案失敗: {e}")
             raise
+    
+    # ===== 工作區化檔案管理 =====
+    
+    async def save_workspace_temp_file(self, file: UploadFile, file_hash: str, workspace_id: UUID) -> Tuple[str, str]:
+        """
+        儲存工作區暫存檔案
+        返回: (檔案路徑, 內部檔案名)
+        """
+        try:
+            # 創建工作區特定目錄
+            workspace_dir = self.temp_dir / str(workspace_id)
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 生成內部檔案名 (使用雜湊值 + 時間戳記)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            internal_filename = f"{file_hash}_{timestamp}.pdf"
+            file_path = workspace_dir / internal_filename
+            
+            # 使用aiofiles異步儲存檔案
+            async with aiofiles.open(file_path, 'wb') as f:
+                await file.seek(0)
+                content = await file.read()
+                await f.write(content)
+            
+            logger.info(f"工作區檔案已儲存: {file_path}")
+            return str(file_path), internal_filename
+            
+        except Exception as e:
+            logger.error(f"儲存工作區暫存檔案失敗: {e}")
+            raise
+    
+    async def delete_workspace_file(self, file_hash: str, workspace_id: UUID) -> bool:
+        """刪除工作區檔案"""
+        try:
+            workspace_dir = self.temp_dir / str(workspace_id)
+            
+            # 尋找符合雜湊值的檔案
+            if workspace_dir.exists():
+                for file_path in workspace_dir.glob(f"{file_hash}_*.pdf"):
+                    if file_path.is_file():
+                        file_path.unlink()
+                        logger.info(f"工作區檔案已刪除: {file_path}")
+                        return True
+            
+            logger.warning(f"工作區檔案不存在，無法刪除: {file_hash} in workspace {workspace_id}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"刪除工作區檔案失敗: {e}")
+            return False
+    
+    def get_workspace_temp_directory_info(self, workspace_id: UUID) -> Dict[str, Any]:
+        """取得工作區暫存目錄資訊"""
+        try:
+            workspace_dir = self.temp_dir / str(workspace_id)
+            
+            if not workspace_dir.exists():
+                return {
+                    "workspace_directory": str(workspace_dir),
+                    "exists": False,
+                    "file_count": 0,
+                    "total_size_mb": 0,
+                    "files": []
+                }
+            
+            files = []
+            total_size = 0
+            
+            for file_path in workspace_dir.iterdir():
+                if file_path.is_file():
+                    file_stat = file_path.stat()
+                    file_info = {
+                        "name": file_path.name,
+                        "size_bytes": file_stat.st_size,
+                        "size_mb": round(file_stat.st_size / (1024 * 1024), 2),
+                        "modified_time": datetime.fromtimestamp(file_stat.st_mtime).isoformat(),
+                    }
+                    files.append(file_info)
+                    total_size += file_stat.st_size
+            
+            return {
+                "workspace_directory": str(workspace_dir),
+                "exists": True,
+                "file_count": len(files),
+                "total_size_mb": round(total_size / (1024 * 1024), 2),
+                "files": files
+            }
+            
+        except Exception as e:
+            logger.error(f"取得工作區目錄資訊失敗: {e}")
+            return {
+                "workspace_directory": str(self.temp_dir / str(workspace_id)),
+                "exists": False,
+                "error": str(e),
+                "file_count": 0,
+                "total_size_mb": 0,
+                "files": []
+            }
+    
+    async def cleanup_workspace_temp_files(self, workspace_id: UUID, max_age_hours: int = 24) -> Dict[str, Any]:
+        """
+        清理工作區內過期的暫存檔案
+        max_age_hours: 檔案最大保留時間（小時）
+        """
+        try:
+            workspace_dir = self.temp_dir / str(workspace_id)
+            
+            if not workspace_dir.exists():
+                return {
+                    "deleted_count": 0,
+                    "total_size_freed_mb": 0,
+                    "deleted_files": [],
+                    "message": "工作區目錄不存在"
+                }
+            
+            cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
+            deleted_files = []
+            total_size_freed = 0
+            
+            for file_path in workspace_dir.iterdir():
+                if file_path.is_file():
+                    # 檢查檔案修改時間
+                    file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                    
+                    if file_mtime < cutoff_time:
+                        try:
+                            file_size = file_path.stat().st_size
+                            file_path.unlink()
+                            deleted_files.append(str(file_path.name))
+                            total_size_freed += file_size
+                            logger.debug(f"已清理工作區過期檔案: {file_path.name}")
+                        except Exception as e:
+                            logger.error(f"清理工作區檔案失敗 {file_path.name}: {e}")
+            
+            # 如果工作區目錄為空，可選擇性刪除目錄
+            try:
+                if not any(workspace_dir.iterdir()):
+                    workspace_dir.rmdir()
+                    logger.info(f"已清理空的工作區目錄: {workspace_dir}")
+            except Exception as e:
+                logger.debug(f"清理工作區目錄失敗: {e}")
+            
+            return {
+                "deleted_count": len(deleted_files),
+                "total_size_freed_mb": round(total_size_freed / (1024 * 1024), 2),
+                "deleted_files": deleted_files,
+                "workspace_id": str(workspace_id)
+            }
+            
+        except Exception as e:
+            logger.error(f"清理工作區暫存檔案失敗: {e}")
+            return {
+                "deleted_count": 0,
+                "total_size_freed_mb": 0,
+                "deleted_files": [],
+                "error": str(e),
+                "workspace_id": str(workspace_id)
+            }
+    
+    async def cleanup_orphaned_workspace_files(self, workspace_id: UUID, valid_file_hashes: List[str]) -> Dict[str, Any]:
+        """
+        清理工作區內的孤立檔案（資料庫中沒有記錄的檔案）
+        valid_file_hashes: 資料庫中有效的檔案雜湊值列表
+        """
+        try:
+            workspace_dir = self.temp_dir / str(workspace_id)
+            
+            if not workspace_dir.exists():
+                return {
+                    "deleted_count": 0,
+                    "total_size_freed_mb": 0,
+                    "deleted_files": [],
+                    "message": "工作區目錄不存在"
+                }
+            
+            deleted_files = []
+            total_size_freed = 0
+            
+            for file_path in workspace_dir.iterdir():
+                if file_path.is_file() and file_path.suffix.lower() == '.pdf':
+                    # 從檔案名提取雜湊值
+                    file_hash = file_path.stem.split('_')[0]
+                    
+                    if file_hash not in valid_file_hashes:
+                        try:
+                            file_size = file_path.stat().st_size
+                            file_path.unlink()
+                            deleted_files.append(str(file_path.name))
+                            total_size_freed += file_size
+                            logger.debug(f"已清理工作區孤立檔案: {file_path.name}")
+                        except Exception as e:
+                            logger.error(f"清理工作區孤立檔案失敗 {file_path.name}: {e}")
+            
+            return {
+                "deleted_count": len(deleted_files),
+                "total_size_freed_mb": round(total_size_freed / (1024 * 1024), 2),
+                "deleted_files": deleted_files,
+                "workspace_id": str(workspace_id)
+            }
+            
+        except Exception as e:
+            logger.error(f"清理工作區孤立檔案失敗: {e}")
+            return {
+                "deleted_count": 0,
+                "total_size_freed_mb": 0,
+                "deleted_files": [],
+                "error": str(e),
+                "workspace_id": str(workspace_id)
+            }
     
     # ===== 檔案管理相關 =====
     

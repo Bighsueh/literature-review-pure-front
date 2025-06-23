@@ -68,6 +68,33 @@ class Settings(BaseSettings):
     # 安全設定
     secret_key: str = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
     
+    # JWT 設定
+    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "your-super-secret-jwt-key-change-this-in-production")
+    jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
+    jwt_expire_hours: int = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
+    
+    # Google OAuth 設定
+    google_client_id: str = os.getenv("GOOGLE_CLIENT_ID", "")
+    google_client_secret: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    google_redirect_uri: str = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:28001/api/auth/google/callback")
+    
+    # 前端設定
+    frontend_url: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    
+    def validate_oauth_config(self) -> bool:
+        """驗證 Google OAuth 配置是否完整"""
+        return bool(self.google_client_id and self.google_client_secret)
+    
+    def get_oauth_status(self) -> dict:
+        """取得 OAuth 配置狀態"""
+        return {
+            "google_oauth_configured": self.validate_oauth_config(),
+            "client_id_present": bool(self.google_client_id),
+            "client_secret_present": bool(self.google_client_secret),
+            "redirect_uri": self.google_redirect_uri,
+            "frontend_url": self.frontend_url
+        }
+    
     # 測試設定
     testing: bool = os.getenv("TESTING", "false").lower() == "true"
     

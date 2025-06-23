@@ -1,6 +1,5 @@
 from sqlalchemy import Column, String, Integer, Text, Boolean, TIMESTAMP, DECIMAL, ForeignKey, UUID, BIGINT
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from pydantic import BaseModel, Field
@@ -9,7 +8,7 @@ from datetime import datetime
 from enum import Enum
 import uuid
 
-Base = declarative_base()
+from .base import Base
 
 # ===== SQLAlchemy ORM Models =====
 
@@ -17,12 +16,13 @@ class Paper(Base):
     __tablename__ = "papers"
     
     id = Column(UUID, primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=True)
     file_name = Column(String(255), nullable=False)
     original_filename = Column(String(255))
     upload_timestamp = Column(TIMESTAMP, default=func.current_timestamp())
     processing_status = Column(String(50), default='uploading')
     file_size = Column(BIGINT)
-    file_hash = Column(String(64), unique=True)
+    file_hash = Column(String(64))  # Note: unique constraint is now composite with workspace_id
     grobid_processed = Column(Boolean, default=False)
     sentences_processed = Column(Boolean, default=False)
     od_cd_processed = Column(Boolean, default=False)
@@ -34,6 +34,7 @@ class Paper(Base):
     created_at = Column(TIMESTAMP, default=func.current_timestamp())
     
     # Relationships
+    workspace = relationship("Workspace", back_populates="papers")
     sections = relationship("PaperSection", back_populates="paper", cascade="all, delete-orphan")
     sentences = relationship("Sentence", back_populates="paper", cascade="all, delete-orphan")
     selection = relationship("PaperSelection", back_populates="paper", uselist=False, cascade="all, delete-orphan")
@@ -44,6 +45,7 @@ class PaperSection(Base):
     
     id = Column(UUID, primary_key=True, default=uuid.uuid4)
     paper_id = Column(UUID, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
+    workspace_id = Column(UUID, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=True)
     section_type = Column(String(50), nullable=False)
     page_num = Column(Integer)
     content = Column(Text, nullable=False)
@@ -54,6 +56,7 @@ class PaperSection(Base):
     
     # Relationships
     paper = relationship("Paper", back_populates="sections")
+    workspace = relationship("Workspace", back_populates="sections")
     sentences = relationship("Sentence", back_populates="section", cascade="all, delete-orphan")
 
 class Sentence(Base):
@@ -62,6 +65,7 @@ class Sentence(Base):
     id = Column(UUID, primary_key=True, default=uuid.uuid4)
     paper_id = Column(UUID, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
     section_id = Column(UUID, ForeignKey('paper_sections.id', ondelete='CASCADE'), nullable=False)
+    workspace_id = Column(UUID, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=True)
     content = Column(Text, nullable=False)
     sentence_order = Column(Integer)
     word_count = Column(Integer)
@@ -81,6 +85,7 @@ class Sentence(Base):
     # Relationships
     paper = relationship("Paper", back_populates="sentences")
     section = relationship("PaperSection", back_populates="sentences")
+    workspace = relationship("Workspace", back_populates="sentences")
 
     # 為了向後相容，添加一個屬性別名
     @property
@@ -95,18 +100,21 @@ class PaperSelection(Base):
     __tablename__ = "paper_selections"
     
     id = Column(UUID, primary_key=True, default=uuid.uuid4)
-    paper_id = Column(UUID, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False, unique=True)
+    paper_id = Column(UUID, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
+    workspace_id = Column(UUID, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=True)
     is_selected = Column(Boolean, default=True)
     selected_timestamp = Column(TIMESTAMP, default=func.current_timestamp())
     
     # Relationships
     paper = relationship("Paper", back_populates="selection")
+    workspace = relationship("Workspace", back_populates="paper_selections")
 
 class ProcessingQueue(Base):
     __tablename__ = "processing_queue"
     
     id = Column(UUID, primary_key=True, default=uuid.uuid4)
     paper_id = Column(UUID, ForeignKey('papers.id', ondelete='CASCADE'), nullable=False)
+    workspace_id = Column(UUID, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=True)
     processing_stage = Column(String(50), nullable=False)
     status = Column(String(20), default='pending')
     priority = Column(Integer, default=0)
@@ -120,6 +128,7 @@ class ProcessingQueue(Base):
     
     # Relationships
     paper = relationship("Paper", back_populates="processing_queue")
+    workspace = relationship("Workspace", back_populates="processing_queue")
 
 class SystemSettings(Base):
     __tablename__ = "system_settings"
