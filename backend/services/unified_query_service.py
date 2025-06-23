@@ -17,6 +17,17 @@ from backend.core.database import get_db
 
 logger = get_logger(__name__)
 
+def convert_uuids_to_strings(data: Any) -> Any:
+    """遞迴轉換字典或列表中的 UUID 物件為字串"""
+    if isinstance(data, dict):
+        return {k: convert_uuids_to_strings(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [convert_uuids_to_strings(i) for i in data]
+    elif isinstance(data, UUID):
+        return str(data)
+    else:
+        return data
+
 class UnifiedQueryProcessor:
     """統一查詢處理器 - 處理所有類型的查詢，嚴格執行工作區隔離"""
     
@@ -160,11 +171,11 @@ class UnifiedQueryProcessor:
             verified_summary = []
             for paper_summary in papers_summary:
                 # 通過檔案名在資料庫中驗證工作區歸屬
-                paper = next((p for p in selected_papers if p.file_name == paper_summary.file_name), None)
+                paper = next((p for p in selected_papers if p.file_name == paper_summary.get('file_name')), None)
                 if paper and str(paper.workspace_id) == str(workspace_id):
                     verified_summary.append(paper_summary)
                 else:
-                    logger.warning(f"論文 {paper_summary.file_name} 不屬於工作區 {workspace_id}，已過濾")
+                    logger.warning(f"論文 {paper_summary.get('file_name')} 不屬於工作區 {workspace_id}，已過濾")
             
             logger.info(f"工作區 {workspace_id} 中獲取到 {len(verified_summary)} 個論文摘要")
             return verified_summary
@@ -185,9 +196,12 @@ class UnifiedQueryProcessor:
         try:
             logger.info(f"執行智能章節選擇: workspace={workspace_id}, 論文數={len(papers_summary)}")
             
+            # 清理 UUID，確保所有內容都可以 JSON 序列化
+            cleaned_papers_summary = convert_uuids_to_strings(papers_summary)
+            
             # 添加工作區資訊到上下文
             enhanced_papers_summary = []
-            for paper in papers_summary:
+            for paper in cleaned_papers_summary:
                 enhanced_paper = paper.copy()
                 enhanced_paper['workspace_id'] = str(workspace_id)
                 enhanced_papers_summary.append(enhanced_paper)
@@ -195,8 +209,8 @@ class UnifiedQueryProcessor:
             # 調用N8N智能章節選擇API
             selection_result = await n8n_service.intelligent_section_selection(
                 query=query,
-                    available_papers=enhanced_papers_summary
-                )
+                available_papers=enhanced_papers_summary
+            )
         
             # 驗證選擇結果只包含當前工作區的內容
             if 'selected_sections' in selection_result:
@@ -204,7 +218,7 @@ class UnifiedQueryProcessor:
                 for section in selection_result['selected_sections']:
                     paper_name = section.get('paper_name', '')
                     # 確保該論文確實屬於當前工作區
-                    if any(p.file_name == paper_name for p in papers_summary):
+                    if any(p.get('file_name') == paper_name for p in cleaned_papers_summary):
                         verified_sections.append(section)
                     else:
                         logger.warning(f"過濾非工作區論文章節: {paper_name}")
@@ -351,56 +365,31 @@ class UnifiedQueryProcessor:
         selected_content: List[Dict[str, Any]], 
         section_selection: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """統一內容分析（移除降級處理，確保與 flowchart 一致）"""
-        
-        analysis_focus = section_selection.get('analysis_focus', 'understand_content')
-        
-        # 確保 analysis_focus 使用正確的值 (根據 n8n_api_document.md 更新)
-        valid_analysis_focus = [
-            'locate_info', 'understand_content', 'cross_paper', 
-            'definitions', 'methods', 'results', 'comparison', 'other'
-        ]
-        
-        if analysis_focus not in valid_analysis_focus:
-            logger.warning(f"無效的 analysis_focus: {analysis_focus}，使用預設值 'understand_content'")
-            analysis_focus = 'understand_content'
-        
-        # 檢查是否有內容可分析
-        if not selected_content:
-            error_msg = "沒有選中的內容，無法進行統一內容分析"
-            logger.error(error_msg)
-            raise Exception(error_msg)
-        
-        logger.info(f"調用 N8N 統一內容分析，分析重點: {analysis_focus}, 內容數量: {len(selected_content)}")
-        
-        # 呼叫N8N統一內容分析API
-        analysis_result = await n8n_service.unified_content_analysis(
-            query=query,
-            selected_content=selected_content,
-            analysis_focus=analysis_focus
-        )
-        
-        # 檢查是否有錯誤
-        if 'error' in analysis_result:
-            error_msg = f"統一內容分析失敗: {analysis_result['error']}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
-        
-        # 驗證回應格式
-        expected_fields = ['response', 'references', 'source_summary']
-        if not all(field in analysis_result for field in expected_fields):
-            error_msg = f"統一內容分析回應格式異常，缺少必要欄位: {expected_fields}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
-        
-        reference_count = len(analysis_result['references'])
-        papers_analyzed = analysis_result['source_summary'].get('total_papers', 0)
-        logger.info(f"統一內容分析完成，生成 {reference_count} 個引用，分析 {papers_analyzed} 篇論文")
-        
-        return analysis_result
+        """
+        統一內容分析 - 調用N8N工作流程
+        """
+        try:
+            logger.info(f"統一內容分析啟動，選擇內容數: {len(selected_content)}")
+            
+            # 清理 UUID
+            cleaned_content = convert_uuids_to_strings(selected_content)
+            
+            # 從 section_selection 中獲取 analysis_focus
+            analysis_focus = section_selection.get('analysis_focus', 'definitions')
+
+            analysis_result = await n8n_service.unified_content_analysis(
+                query=query,
+                selected_content=cleaned_content,
+                analysis_focus=analysis_focus
+            )
+            return analysis_result
+            
+        except Exception as e:
+            logger.error(f"統一內容分析失敗: {str(e)}")
+            raise QueryProcessingError(f"統一內容分析失敗: {str(e)}") from e
     
     def get_processing_stats(self) -> Dict[str, Any]:
-        """獲取處理統計資訊"""
+        """獲取處理統計數據"""
         return self.processing_stats.copy()
     
     async def health_check(self) -> Dict[str, Any]:

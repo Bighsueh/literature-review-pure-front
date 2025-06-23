@@ -8,6 +8,7 @@ import { devtools, persist } from 'zustand/middleware';
 import { Paper, TaskStatus, UploadResponse } from '../../types/api';
 import { workspaceApiService } from '../../services/workspace_api_service';
 import { useWorkspaceStore } from './workspaceStore';
+import { paperMonitorService } from '../../services/paper_monitor_service';
 
 // 導入全局 appStore 以整合進度監控
 import { useAppStore } from '../appStore';
@@ -60,7 +61,7 @@ interface WorkspaceFileState {
 
 // 創建工作區檔案狀態管理工廠
 const createWorkspaceFileStore = (workspaceId: string) => {
-  return create<WorkspaceFileState>()(
+  const store = create<WorkspaceFileState>()(
     devtools(
       persist(
         (set, get) => ({
@@ -280,6 +281,14 @@ const createWorkspaceFileStore = (workspaceId: string) => {
       { name: `WorkspaceFileStore-${workspaceId}` }
     )
   );
+  
+  // 註冊 paperMonitorService 的回呼
+  paperMonitorService.registerOnStatusChange((paperId: string) => {
+    console.log(`Received status change for paper ${paperId}, refreshing papers...`);
+    store.getState().refreshPapers();
+  });
+
+  return store;
 };
 
 // 工作區檔案 stores 快取
