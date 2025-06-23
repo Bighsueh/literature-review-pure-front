@@ -199,164 +199,104 @@ class UnifiedQueryProcessor:
             # 清理 UUID，確保所有內容都可以 JSON 序列化
             cleaned_papers_summary = convert_uuids_to_strings(papers_summary)
             
-            # 添加工作區資訊到上下文
-            enhanced_papers_summary = []
-            for paper in cleaned_papers_summary:
-                enhanced_paper = paper.copy()
-                enhanced_paper['workspace_id'] = str(workspace_id)
-                enhanced_papers_summary.append(enhanced_paper)
-        
-            # 調用N8N智能章節選擇API
+            # 呼叫 N8N 服務
             selection_result = await n8n_service.intelligent_section_selection(
-                query=query,
-                available_papers=enhanced_papers_summary
+                query=query, 
+                available_papers=cleaned_papers_summary
             )
-        
-            # 驗證選擇結果只包含當前工作區的內容
-            if 'selected_sections' in selection_result:
-                verified_sections = []
-                for section in selection_result['selected_sections']:
-                    paper_name = section.get('paper_name', '')
-                    # 確保該論文確實屬於當前工作區
-                    if any(p.get('file_name') == paper_name for p in cleaned_papers_summary):
-                        verified_sections.append(section)
-                    else:
-                        logger.warning(f"過濾非工作區論文章節: {paper_name}")
-                
-                selection_result['selected_sections'] = verified_sections
             
-            logger.info(f"智能章節選擇完成: workspace={workspace_id}, 選擇章節數={len(selection_result.get('selected_sections', []))}")
+            if "error" in selection_result:
+                raise QueryProcessingError(f"智能章節選擇失敗: {selection_result['error']}")
+            
             return selection_result
             
         except Exception as e:
-            logger.error(f"智能章節選擇失敗: workspace={workspace_id}, error={str(e)}")
-            return {
-                'selected_sections': [],
-                'analysis_focus': 'definitions',
-                'error': str(e)
-            }
+            logger.error(f"智能章節選擇過程中出錯: {str(e)}")
+            raise QueryProcessingError(f"智能章節選擇失敗: {str(e)}")
     
     async def _extract_workspace_content(
-        self, 
+        self,
         db: AsyncSession,
-        query: str, 
-        selected_sections: List[Dict[str, Any]], 
+        query: str,
+        selected_sections: List[Dict[str, Any]],
         analysis_focus: str,
         workspace_id: UUID
     ) -> List[Dict[str, Any]]:
         """
-        提取工作區範圍內的內容 - 嚴格執行工作區隔離
+        從資料庫中提取選定的內容 - 實現穩健的回退機制
+        1. 根據 analysis_focus 優先提取特定類型的內容。
+        2. 如果特定內容不存在，則回退提取關鍵句子。
+        3. 確保為每個選定的章節提供內容，除非該章節完全沒有句子。
         """
         try:
-            if not selected_sections:
-                logger.warning(f"工作區 {workspace_id} 中沒有選中的章節")
-                return []
-            
-            selected_content = []
-            
-            for section_info in selected_sections:
-                paper_name = section_info.get('paper_name', '')
-                section_type = section_info.get('section_type', '')
-                focus_type = section_info.get('focus_type', analysis_focus)
+            logger.info(f"開始提取工作區內容: workspace={workspace_id}, analysis_focus={analysis_focus}, section_count={len(selected_sections)}")
+
+            all_content = []
+
+            for section in selected_sections:
+                paper_id = section.get('paper_id')
+                section_name = section.get('section_name')
+
+                if not paper_id or not section_name:
+                    logger.warning(f"跳過無效的選擇章節: {section}")
+                    continue
+
+                if not await db_service.is_paper_in_workspace(db, paper_id, workspace_id):
+                    logger.warning(f"Paper {paper_id} not in workspace {workspace_id}, skipping.")
+                    continue
+
+                paper_info = await db_service.get_paper_by_id(db, paper_id)
+                if not paper_info:
+                    logger.warning(f"找不到論文資訊: paper_id={paper_id}")
+                    continue
                 
-                logger.info(f"提取內容: workspace={workspace_id}, paper={paper_name}, section={section_type}, focus={focus_type}")
-                
-                # 特殊處理：definitions focus_type
-                if focus_type == 'definitions':
-                    # 提取關鍵詞
-                    keywords_result = await n8n_service.extract_keywords(query)
-                    keywords = []
-                    
-                    # 處理N8N關鍵詞提取API的不同回應格式
-                    if isinstance(keywords_result, dict):
-                        # 格式1: {"keywords": [...]}
-                        if 'keywords' in keywords_result:
-                            keywords = keywords_result.get('keywords', [])
-                        # 格式2: {"output": {"keywords": [...]}} (deprecated)
-                        elif 'output' in keywords_result and isinstance(keywords_result['output'], dict):
-                            keywords = keywords_result['output'].get('keywords', [])
-                    elif isinstance(keywords_result, list) and keywords_result:
-                        # 格式3: [{"output": {"keywords": [...]}}]
-                        first_item = keywords_result[0]
-                        if isinstance(first_item, dict):
-                            if 'keywords' in first_item:
-                                keywords = first_item.get('keywords', [])
-                            elif 'output' in first_item and isinstance(first_item['output'], dict):
-                                keywords = first_item['output'].get('keywords', [])
-            
-                    # 在工作區範圍內搜尋定義句子
-                    definition_sentences = await db_service.search_sentences_in_workspace(
-                        db, workspace_id, 
-                        defining_types=['OD', 'CD'],
-                        keywords=keywords
-                    )
-                    
-                    # 過濾並格式化為 definitions content_type
-                    definitions_content = []
-                    for sentence in definition_sentences:
-                        # 確保句子屬於當前處理的論文和章節
-                        if (sentence.get('file_name') == paper_name and 
-                            sentence.get('section_type') == section_type):
-                            definitions_content.append({
-                                'sentence_id': sentence.get('sentence_id'),
-                                'content': sentence.get('content'),
-                                'defining_type': sentence.get('defining_type'),
-                                'page_num': sentence.get('page_num'),
-                                'paper_name': paper_name,
-                                'section_type': section_type
-                            })
-                    
-                    if definitions_content:
-                        selected_content.append({
-                            'paper_name': paper_name,
-                            'section_type': section_type,
-                            'content_type': 'definitions',
-                            'content': definitions_content
-                        })
-                
-                else:
-                    # 一般內容提取流程
-                    if focus_type == 'key_sentences':
-                        # 在工作區範圍內搜尋關鍵句子
-                        key_sentences = await db_service.search_sentences_in_workspace(
-                            db, workspace_id,
-                            keywords=[query]  # 使用查詢作為關鍵詞
-                        )
-                    
-                        # 過濾屬於當前論文和章節的句子
-                        filtered_sentences = [
-                            s for s in key_sentences 
-                            if (s.get('file_name') == paper_name and 
-                                s.get('section_type') == section_type)
+                content_block = {
+                    "paper_name": paper_info.file_name,
+                    "section_type": section_name,
+                }
+                content_found = False
+
+                # 1. 根據 analysis_focus 優先提取
+                if analysis_focus == 'definitions':
+                    definitions = await db_service.get_definitions_by_section(db, paper_id, section_name)
+                    if definitions:
+                        content_block["content_type"] = "definitions"
+                        content_block["content"] = [
+                            {"page_num": d.page_num, "text": str(d.text), "type": str(d.definition_type)}
+                            for d in definitions
                         ]
-                        
-                        if filtered_sentences:
-                            selected_content.append({
-                                'paper_name': paper_name,
-                                'section_type': section_type,
-                                'content_type': 'key_sentences',
-                                'content': filtered_sentences
-                            })
-                    
-                    elif focus_type == 'full_section':
-                        # 獲取完整章節內容（在工作區範圍內）
-                        section_content = await db_service.get_section_content_by_workspace(
-                            db, workspace_id, paper_name, section_type
-                        )
-                        
-                        if section_content:
-                            selected_content.append({
-                                'paper_name': paper_name,
-                                'section_type': section_type,
-                                'content_type': 'full_section',
-                                'content': section_content
-                            })
-            
-            logger.info(f"內容提取完成: workspace={workspace_id}, 提取項目數={len(selected_content)}")
-            return selected_content
-                    
+                        content_found = True
+                
+                elif analysis_focus == 'methods':
+                    full_section = await db_service.get_full_section_content(db, paper_id, section_name)
+                    if full_section and full_section.get('text'):
+                        content_block["content_type"] = "full_section"
+                        content_block["content"] = str(full_section.get('text', ''))
+                        content_found = True
+
+                # 2. 如果優先內容未找到，回退到提取關鍵句子
+                if not content_found:
+                    # 'locate_info', 'understand_content', etc. 也使用此邏輯
+                    sentences = await db_service.get_top_k_sentences_by_section(db, paper_id, section_name, k=5)
+                    if sentences:
+                        content_block["content_type"] = "key_sentences"
+                        content_block["content"] = [
+                            {"page_num": s.page_num, "sentence_text": str(s.sentence)}
+                            for s in sentences
+                        ]
+                        content_found = True
+
+                # 3. 如果找到了任何類型的內容，則添加到最終列表中
+                if content_found:
+                    all_content.append(content_block)
+                else:
+                    logger.warning(f"無法為章節提取任何內容: paper_id={paper_id}, section={section_name}")
+
+            logger.info(f"工作區內容提取完成: workspace={workspace_id}, 提取到 {len(all_content)} 項內容")
+            return all_content
+
         except Exception as e:
-            logger.error(f"工作區內容提取失敗: workspace={workspace_id}, error={str(e)}")
+            logger.error(f"提取工作區內容時出錯: workspace={workspace_id}, error={str(e)}")
             return []
     
     async def _unified_content_analysis(
@@ -386,7 +326,7 @@ class UnifiedQueryProcessor:
             
         except Exception as e:
             logger.error(f"統一內容分析失敗: {str(e)}")
-            raise QueryProcessingError(f"統一內容分析失敗: {str(e)}") from e
+            raise QueryProcessingError(f"統一內容分析過程中出錯: {e}")
     
     def get_processing_stats(self) -> Dict[str, Any]:
         """獲取處理統計數據"""
