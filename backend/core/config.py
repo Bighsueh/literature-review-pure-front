@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # 忽略額外的環境變數（如VITE_前綴的變數）
 
 
 @lru_cache()

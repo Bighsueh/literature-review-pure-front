@@ -5,13 +5,13 @@
 
 import React from 'react';
 import { useResponsive } from '../hooks/useResponsive';
-import { useWorkspaceContext } from '../contexts/WorkspaceContext';
+import { useWorkspace } from '../contexts/WorkspaceContext';
 import ResponsiveMainLayout from './ResponsiveMainLayout';
 import WorkspaceSwitcher from './workspace/WorkspaceSwitcher';
 
 const WorkspaceAwareLayout: React.FC = () => {
   const { isDesktop, isTablet, isMobile } = useResponsive();
-  const { currentWorkspace } = useWorkspaceContext();
+  const { currentWorkspace } = useWorkspace();
 
   // 渲染工作區頂部導航欄
   const renderWorkspaceHeader = () => {

@@ -209,7 +209,7 @@ async def paginate_workspace_papers(
     if filters:
         if filters.search:
             query = query.where(
-                Paper.title.ilike(f"%{filters.search}%") |
+                Paper.file_name.ilike(f"%{filters.search}%") |
                 Paper.original_filename.ilike(f"%{filters.search}%")
             )
         
@@ -217,15 +217,15 @@ async def paginate_workspace_papers(
             query = query.where(Paper.processing_status == filters.status)
         
         if filters.start_date:
-            query = query.where(Paper.upload_time >= filters.start_date)
+            query = query.where(Paper.upload_timestamp >= filters.start_date)
         
         if filters.end_date:
-            query = query.where(Paper.upload_time <= filters.end_date)
+            query = query.where(Paper.upload_timestamp <= filters.end_date)
     
     # 定義可排序字段
     sortable_fields = {
-        "upload_time": SortableField("upload_time", Paper.upload_time, "desc"),
-        "title": SortableField("title", Paper.title, "asc"),
+        "upload_timestamp": SortableField("upload_timestamp", Paper.upload_timestamp, "desc"),
+        "file_name": SortableField("file_name", Paper.file_name, "asc"),
         "file_size": SortableField("file_size", Paper.file_size, "desc"),
         "processing_status": SortableField("processing_status", Paper.processing_status, "asc")
     }

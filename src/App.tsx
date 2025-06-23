@@ -5,7 +5,7 @@ import WorkspaceSelector from './components/workspace/WorkspaceSelector';
 import WorkspaceSwitcher from './components/workspace/WorkspaceSwitcher';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import { TokenManager, workspaceApiService } from './services/workspace_api_service';
-import { WorkspaceProvider, useWorkspaceContext } from './contexts/WorkspaceContext';
+import { WorkspaceProvider, useWorkspace } from './contexts/WorkspaceContext';
 import { useWorkspaceStore } from './stores/workspace';
 import { useResponsive } from './hooks/useResponsive';
 import { User, UserWithWorkspaces } from './types/api';
@@ -91,7 +91,7 @@ interface AuthState {
 
 // 工作區感知佈局組件
 const WorkspaceAwareLayout: React.FC = () => {
-  const { hasValidWorkspace, currentWorkspace } = useWorkspaceContext();
+  const { hasValidWorkspace, currentWorkspace } = useWorkspace();
   const { isDesktop, isMobile } = useResponsive();
   
   // 如果沒有有效的工作區，顯示工作區選擇器

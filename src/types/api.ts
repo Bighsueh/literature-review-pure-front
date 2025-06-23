@@ -56,13 +56,18 @@ export interface ApiResponse<T = unknown> {
   message?: string;
 }
 
-export interface PaginatedResponse<T> {
-  items: T[];
-  total_count: number;
+export interface PaginationMeta {
   page: number;
-  page_size: number;
+  size: number;
+  total: number;
+  total_pages: number;
   has_next: boolean;
   has_previous: boolean;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  meta: PaginationMeta;
 }
 
 export interface ApiError {
@@ -121,7 +126,7 @@ export interface UserWithWorkspaces extends User {
 
 // ===== 論文/檔案相關類型 =====
 
-export type ProcessingStatus = 'uploading' | 'processing' | 'completed' | 'error';
+export type ProcessingStatus = 'uploading' | 'pending' | 'processing' | 'completed' | 'error';
 
 export interface Paper {
   id: string;

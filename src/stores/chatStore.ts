@@ -51,17 +51,26 @@ export const useChatStore = create<ChatState>()(
           currentConversationId: id
         }),
         
-        addMessage: (conversationId, message) => set((state) => ({
-          conversations: state.conversations.map(conversation => 
-            conversation.id === conversationId 
-              ? { 
-                  ...conversation, 
-                  messages: [...conversation.messages, message],
-                  updatedAt: new Date()
-                } 
-              : conversation
-          )
-        })),
+        addMessage: (conversationId, message) => set((state) => {
+          // 確保 message.content 不為 undefined
+          const sanitizedMessage = {
+            ...message,
+            content: message.content || '',
+            timestamp: message.timestamp || new Date()
+          };
+          
+          return {
+            conversations: state.conversations.map(conversation => 
+              conversation.id === conversationId 
+                ? { 
+                    ...conversation, 
+                    messages: [...conversation.messages, sanitizedMessage],
+                    updatedAt: new Date()
+                  } 
+                : conversation
+            )
+          };
+        }),
         
         updateMessage: (conversationId, messageId, updates) => set((state) => ({
           conversations: state.conversations.map(conversation => 

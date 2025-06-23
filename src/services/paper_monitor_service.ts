@@ -1,5 +1,8 @@
 import { apiService, PaperStatusResponse } from './api_service';
 
+// 定義回呼函數簽名
+type StatusChangeCallback = (paperId: string) => void;
+
 interface PaperMonitor {
   paperId: string;
   intervalId: NodeJS.Timeout;
@@ -30,6 +33,31 @@ class PaperMonitorService {
   private readonly maxRetries = 5; // 最大重試次數
   private readonly errorCacheDuration = 60000; // 錯誤快取持續時間 1分鐘
   private errorCache: ErrorCache = {};
+  
+  // 新增: 狀態變更回呼列表
+  private onStatusChangeCallbacks: StatusChangeCallback[] = [];
+
+  /**
+   * 註冊狀態變更回呼
+   */
+  registerOnStatusChange(callback: StatusChangeCallback): void {
+    if (!this.onStatusChangeCallbacks.includes(callback)) {
+      this.onStatusChangeCallbacks.push(callback);
+    }
+  }
+  
+  /**
+   * 觸發所有狀態變更回呼
+   */
+  private triggerStatusChange(paperId: string): void {
+    this.onStatusChangeCallbacks.forEach(callback => {
+      try {
+        callback(paperId);
+      } catch (error) {
+        console.error('Error executing status change callback:', error);
+      }
+    });
+  }
 
   /**
    * 計算指數退避間隔
@@ -109,12 +137,38 @@ class PaperMonitorService {
         return { success: true, status: result.data };
       } else {
         const error = result.error || 'API call failed without specific error';
-        this.updateErrorCache(paperId, error);
+        
+        // 特殊處理 404 錯誤：檢查是否是暫時的問題
+        if (error.includes('404') || error.includes('Not Found')) {
+          // 對於 404 錯誤，使用更寬鬆的重試策略
+          console.warn(`Got 404 for ${paperId}, this might be a temporary routing issue`);
+          this.updateErrorCache(paperId, `Temporary routing issue: ${error}`);
+          
+          // 檢查是否連續多次 404（可能是檔案真的不存在）
+          const cached = this.errorCache[paperId];
+          if (cached && cached.errorCount >= 3) {
+            return { 
+              success: false, 
+              error: `檔案可能不存在或已被刪除 (${cached.errorCount} consecutive 404s)` 
+            };
+          }
+        } else {
+          this.updateErrorCache(paperId, error);
+        }
+        
         return { success: false, error };
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      this.updateErrorCache(paperId, errorMessage);
+      
+      // 網路錯誤的特殊處理
+      if (errorMessage.includes('fetch') || errorMessage.includes('network')) {
+        console.warn(`Network error for ${paperId}:`, errorMessage);
+        this.updateErrorCache(paperId, `Network issue: ${errorMessage}`);
+      } else {
+        this.updateErrorCache(paperId, errorMessage);
+      }
+      
       return { success: false, error: errorMessage };
     }
   }
@@ -164,10 +218,18 @@ class PaperMonitorService {
           await this.syncPaperDataOnCompletion(paperId);
           
           callbacks.onComplete(status);
+          
+          // 新增：觸發全局狀態變更
+          this.triggerStatusChange(paperId);
+          
           return;
         } else if (status.status === 'error') {
           this.stopMonitoring(paperId);
           callbacks.onError(status.error_message || 'Processing failed without a specific message.');
+          
+          // 新增：觸發全局狀態變更
+          this.triggerStatusChange(paperId);
+          
           return;
         }
       } else {
@@ -186,6 +248,10 @@ class PaperMonitorService {
         if (monitor.retryCount >= monitor.maxRetries) {
           this.stopMonitoring(paperId);
           callbacks.onError(`Max retries (${monitor.maxRetries}) exceeded for paper ${paperId}. Last error: ${result.error}`);
+          
+          // 新增：觸發全局狀態變更
+          this.triggerStatusChange(paperId);
+
           return;
         }
         
@@ -194,6 +260,10 @@ class PaperMonitorService {
         if (timeSinceLastSuccess > 300000) { // 5分鐘
           this.stopMonitoring(paperId);
           callbacks.onError(`Monitoring timeout for paper ${paperId}. No successful response in ${Math.round(timeSinceLastSuccess / 60000)} minutes.`);
+          
+          // 新增：觸發全局狀態變更
+          this.triggerStatusChange(paperId);
+          
           return;
         }
       }

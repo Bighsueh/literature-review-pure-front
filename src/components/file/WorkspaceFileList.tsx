@@ -20,7 +20,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { CheckIcon as CheckIconSolid } from '@heroicons/react/24/solid';
 import { useWorkspaceFileStore } from '../../stores/workspace/workspaceFileStore';
-import { useWorkspaceContext } from '../../contexts/WorkspaceContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { Paper } from '../../types/api';
 import LoadingSpinner from '../common/LoadingSpinner';
 
@@ -35,7 +35,7 @@ interface WorkspaceFileListProps {
 // 排序和篩選選項
 type SortOption = 'name' | 'date' | 'size' | 'status';
 type SortDirection = 'asc' | 'desc';
-type StatusFilter = 'all' | 'pending' | 'processing' | 'completed' | 'failed';
+type StatusFilter = 'all' | 'uploading' | 'pending' | 'processing' | 'completed' | 'error';
 
 // 檔案列表標題組件
 const FileListHeader: React.FC<{
@@ -150,10 +150,11 @@ const FileListControls: React.FC<{
 
   const statusOptions = [
     { value: 'all', label: '全部' },
+    { value: 'uploading', label: '上傳中' },
     { value: 'pending', label: '等待中' },
     { value: 'processing', label: '處理中' },
     { value: 'completed', label: '已完成' },
-    { value: 'failed', label: '失敗' }
+    { value: 'error', label: '失敗' }
   ] as const;
 
   if (compact) {
@@ -303,7 +304,10 @@ const FileItem: React.FC<{
   };
 
   const getStatusInfo = (status: Paper['processing_status']) => {
-    switch (status) {
+    // 後端使用 'error'，前端顯示為 'failed'
+    const displayStatus = status === 'error' ? 'failed' : status;
+    
+    switch (displayStatus) {
       case 'completed':
         return { 
           icon: <CheckCircleIcon className={`${compact ? 'h-4 w-4' : 'h-5 w-5'} text-green-500`} />, 
@@ -320,6 +324,12 @@ const FileItem: React.FC<{
         return { 
           icon: <ArrowPathIcon className={`${compact ? 'h-4 w-4' : 'h-5 w-5'} text-blue-500 animate-spin`} />, 
           text: '處理中',
+          className: 'bg-blue-100 text-blue-800'
+        };
+      case 'uploading':
+        return { 
+          icon: <ArrowPathIcon className={`${compact ? 'h-4 w-4' : 'h-5 w-5'} text-blue-500 animate-spin`} />, 
+          text: '上傳中',
           className: 'bg-blue-100 text-blue-800'
         };
       case 'pending':
@@ -390,11 +400,11 @@ const FileItem: React.FC<{
 
         {/* 檔案資訊 */}
         <div className="flex-1 min-w-0">
-          <p className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-gray-900 truncate`} title={paper.title}>
-            {paper.title}
+          <p className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-gray-900 truncate`} title={paper.original_filename || paper.file_name}>
+            {paper.original_filename || paper.file_name}
           </p>
           <div className={`${compact ? 'text-xs' : 'text-sm'} text-gray-500 space-y-0.5`}>
-            <p>{formatDate(paper.upload_time)}</p>
+            <p>{formatDate(paper.upload_timestamp)}</p>
             {!compact && paper.file_size && (
               <p>{formatFileSize(paper.file_size)}</p>
             )}
@@ -449,7 +459,7 @@ const WorkspaceFileList: React.FC<WorkspaceFileListProps> = ({
   enableBatchOperations = true,
   compact = false
 }) => {
-  const { currentWorkspace } = useWorkspaceContext();
+  const { currentWorkspace } = useWorkspace();
   const { 
     papers, 
     selectedPaperIds, 
@@ -459,7 +469,6 @@ const WorkspaceFileList: React.FC<WorkspaceFileListProps> = ({
     togglePaperSelection,
     setBatchSelection,
     clearSelection,
-    selectAll,
     deletePaper
   } = useWorkspaceFileStore(currentWorkspace?.id || '');
 
@@ -484,7 +493,7 @@ const WorkspaceFileList: React.FC<WorkspaceFileListProps> = ({
     // 搜尋篩選
     if (searchQuery) {
       filtered = filtered.filter(paper =>
-        paper.title.toLowerCase().includes(searchQuery.toLowerCase())
+        (paper.original_filename || paper.file_name).toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 
@@ -499,18 +508,25 @@ const WorkspaceFileList: React.FC<WorkspaceFileListProps> = ({
       
       switch (sortOption) {
         case 'name':
-          comparison = a.title.localeCompare(b.title);
+          comparison = (a.original_filename || a.file_name).localeCompare(b.original_filename || b.file_name);
           break;
         case 'date':
-          comparison = new Date(a.upload_time).getTime() - new Date(b.upload_time).getTime();
+          comparison = new Date(a.upload_timestamp).getTime() - new Date(b.upload_timestamp).getTime();
           break;
         case 'size':
           comparison = (a.file_size || 0) - (b.file_size || 0);
           break;
-        case 'status':
-          const statusOrder = { pending: 0, processing: 1, completed: 2, failed: 3 };
+        case 'status': {
+          const statusOrder = { 
+            uploading: 0, 
+            pending: 1, 
+            processing: 2, 
+            completed: 3, 
+            error: 4 
+          };
           comparison = statusOrder[a.processing_status] - statusOrder[b.processing_status];
           break;
+        }
       }
       
       return sortDirection === 'asc' ? comparison : -comparison;

@@ -29,6 +29,7 @@ services:
     ports:
       - "28001:8000"  # 後端 API 服務
     environment:
+      - ENVIRONMENT=development
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=paper_analysis
@@ -54,6 +55,13 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # 添加DNS配置解決外部域名解析問題
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    extra_hosts:
+      - "grobid.hsueh.tw:172.67.184.210"
+      - "n8n.hsueh.tw:172.67.184.210"
     networks:
       - app-network
 

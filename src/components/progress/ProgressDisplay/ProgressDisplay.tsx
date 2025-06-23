@@ -1,14 +1,21 @@
 import React from 'react';
 import { useAppStore } from '../../../stores/appStore';
+import { useWorkspace } from '../../../contexts/WorkspaceContext';
+import { useWorkspaceFileStore } from '../../../stores/workspace/workspaceFileStore';
 import ProgressBar from '../../common/ProgressBar/ProgressBar';
 import { ProcessingStage } from '../../../types/api';
 
 const ProgressDisplay: React.FC = () => {
   const { progress } = useAppStore();
+  const { currentWorkspace } = useWorkspace();
+  const { uploadingFiles } = useWorkspaceFileStore(currentWorkspace?.id || '');
   
-  const isIdle = progress.currentStage === 'idle' && !progress.isProcessing;
+  // 檢查是否有工作區上傳進度
+  const hasWorkspaceUploads = Object.keys(uploadingFiles).length > 0;
+  const isIdle = progress.currentStage === 'idle' && !progress.isProcessing && !hasWorkspaceUploads;
   
   const getStageTitle = (stage: ProcessingStage): string => {
+    if (hasWorkspaceUploads) return '檔案上傳中';
     if (isIdle) return '處理完成';
     const titles: Record<ProcessingStage, string> = {
       idle: '準備就緒',
@@ -26,6 +33,7 @@ const ProgressDisplay: React.FC = () => {
   };
   
   const getStageDescription = (stage: ProcessingStage): string => {
+    if (hasWorkspaceUploads) return '正在上傳檔案到伺服器...';
     if (isIdle) return '系統已準備好，可開始新的處理任務。';
     const descriptions: Record<ProcessingStage, string> = {
       idle: '系統已準備好處理檔案或查詢',
@@ -41,95 +49,50 @@ const ProgressDisplay: React.FC = () => {
     
     return descriptions[stage] || '';
   };
-  
-  // 渲染特定階段的詳細資訊
-  const renderStageDetails = () => {
-    const { currentStage, details } = progress;
+
+  // 計算整體進度
+  const getOverallProgress = (): number => {
+    if (hasWorkspaceUploads) {
+      const uploadProgresses = Object.values(uploadingFiles).map(u => u.progress);
+      return uploadProgresses.reduce((sum, prog) => sum + prog, 0) / uploadProgresses.length;
+    }
+    return isIdle ? 100 : progress.percentage;
+  };
+
+  // 渲染工作區上傳詳情
+  const renderWorkspaceUploadDetails = () => {
+    if (!hasWorkspaceUploads) return null;
     
-    if (!details) return null;
-    
-    switch (currentStage) {
-      case 'analyzing':
-        return (
-          <div className="mt-2 text-sm">
-            {details.stepName && <p className="font-medium">{details.stepName}</p>}
-            {details.currentStep && details.totalSteps && (
-              <p className="text-sm text-gray-600 mt-1">
-                步驟 {details.currentStep}/{details.totalSteps}
-              </p>
-            )}
-            {details.message && <p className="mt-1">{details.message}</p>}
-            {details.currentSentence && (
-              <div className="mt-1 p-2 bg-gray-50 rounded text-xs">
-                <p className="font-medium">當前處理句子:</p>
-                <p className="italic mt-1">
-                  {typeof details.currentSentence === 'string'
-                    ? details.currentSentence
-                    : details.currentSentence.sentence || JSON.stringify(details.currentSentence)}
-                </p>
-              </div>
-            )}
-            {details.processed && details.total && (
-              <p className="text-right text-xs text-gray-500 mt-1">
-                {details.processed}/{details.total} 句子
-              </p>
-            )}
-          </div>
-        );
-      
-      case 'extracting':
-        return (
-          <div className="mt-2">
-            {details.keywords && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {details.keywords.map((keyword: string, index: number) => (
-                  <span 
-                    key={index} 
-                    className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded"
-                  >
-                    {keyword}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      
-      case 'searching':
-        if (details.odSentences || details.cdSentences) {
-          return (
-            <div className="mt-2 text-sm">
-              <div className="flex justify-between mb-1">
-                <span>操作型定義 (OD):</span>
-                <span className="font-medium">{details.odSentences?.length || 0}</span>
-              </div>
-              <div className="flex justify-between mb-1">
-                <span>概念型定義 (CD):</span>
-                <span className="font-medium">{details.cdSentences?.length || 0}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>總計:</span>
-                <span className="font-medium">{details.total || 0}</span>
-              </div>
+    return (
+      <div className="mt-2 text-sm">
+        <p className="font-medium text-gray-700 mb-2">上傳中的檔案：</p>
+        <div className="space-y-1">
+          {Object.entries(uploadingFiles).map(([uploadId, { fileName, progress }]) => (
+            <div key={uploadId} className="flex justify-between items-center text-xs">
+              <span className="truncate flex-1 mr-2">{fileName}</span>
+              <span className="text-gray-600">{Math.round(progress)}%</span>
             </div>
-          );
-        }
-        return null;
-      
-      case 'error':
-        return (
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // 渲染基本進度詳情
+  const renderBasicDetails = () => {
+    if (!progress.details || isIdle || hasWorkspaceUploads) return null;
+    
+    return (
+      <div className="mt-2 text-sm text-gray-600">
+        <p>{typeof progress.details === 'string' ? progress.details : '處理中...'}</p>
+        {progress.error && (
           <div className="mt-2 text-sm text-red-600">
             <p className="font-medium">錯誤信息:</p>
-            <p className="mt-1">{progress.error || '未知錯誤'}</p>
+            <p className="mt-1">{progress.error}</p>
           </div>
-        );
-      
-      default:
-        if (typeof details === 'string') {
-          return <p className="mt-2 text-sm">{details}</p>;
-        }
-        return null;
-    }
+        )}
+      </div>
+    );
   };
 
   return (
@@ -144,14 +107,15 @@ const ProgressDisplay: React.FC = () => {
       
       <div className="mt-3">
         <ProgressBar 
-          progress={isIdle ? 100 : progress.percentage} 
+          progress={getOverallProgress()} 
           stage={isIdle ? 'completed' : progress.currentStage}
           size="md"
           showLabel={true}
         />
       </div>
       
-      {!isIdle && renderStageDetails()}
+      {renderWorkspaceUploadDetails()}
+      {renderBasicDetails()}
     </div>
   );
 };

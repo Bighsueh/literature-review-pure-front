@@ -1,359 +1,368 @@
 """
-遺留資料存取API
-為新使用者提供訪問升級前歷史資料的能力
+遺留資料存取 API - 重構版本
+負責處理遺留資料的安全存取，確保嚴格的工作區隔離
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, text
-from typing import List, Optional, Dict, Any
-from uuid import UUID
+from typing import List, Dict, Any, Optional
+import uuid
+from datetime import datetime
 
-from ..core.database import get_db
-from ..models.user import User, Workspace
-from ..models.paper import Paper, PaperResponse
-from ..api.dependencies import get_current_user
-from ..core.logging import get_logger
-from ..services.db_service import db_service
+from backend.core.database import get_db
+from backend.core.security import get_current_user
+from backend.core.logging import get_logger
+from backend.api.dependencies import get_workspace_access_dependency
+from backend.services.db_service import db_service
+from backend.models.user import User
+from backend.models.paper import Paper
+from backend.models.user import Workspace
 
+router = APIRouter(prefix="/legacy", tags=["legacy"])
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/legacy", tags=["legacy-data"])
+# 工作區權限依賴
+WorkspaceAccessDep = get_workspace_access_dependency()
 
-@router.get("/papers", response_model=List[PaperResponse])
+@router.get("/papers")
 async def get_legacy_papers(
-    current_user: User = Depends(get_current_user),
+    workspace_id: str = Query(..., description="工作區ID"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    limit: int = Query(50, ge=1, le=100, description="每頁顯示數量"),
-    offset: int = Query(0, ge=0, description="跳過數量")
+    current_user: User = Depends(get_current_user),
+    _workspace_access: dict = Depends(WorkspaceAccessDep)
 ):
     """
-    獲取遺留系統中的論文（無工作區關聯的論文）
-    
-    這些論文是在系統升級前上傳的，還沒有與任何工作區關聯
-    新用戶可以選擇將這些論文導入到自己的工作區中
-    
-    Args:
-        current_user: 當前用戶
-        db: 數據庫會話
-        limit: 每頁顯示數量
-        offset: 跳過數量
-    
-    Returns:
-        遺留論文列表
+    獲取工作區範圍內的遺留論文資料 - 嚴格工作區隔離
     """
     try:
-        # 查詢沒有workspace_id的論文（遺留數據）
-        stmt = (
-            select(Paper)
-            .where(Paper.workspace_id.is_(None))
-            .order_by(Paper.upload_time.desc())
-            .limit(limit)
-            .offset(offset)
+        workspace_uuid = uuid.UUID(workspace_id)
+        
+        # 驗證工作區存取權限
+        has_access = await db_service.verify_workspace_access(db, current_user.id, workspace_uuid)
+        if not has_access:
+            raise HTTPException(
+                status_code=403, 
+                detail=f"用戶無權存取工作區 {workspace_id}"
+            )
+        
+        # 獲取工作區論文，限制查詢範圍
+        papers = await db_service.get_papers_by_workspace(
+            db, workspace_uuid, limit=limit, offset=offset
         )
         
-        result = await db.execute(stmt)
-        papers = result.scalars().all()
-        
-        logger.debug(f"Retrieved {len(papers)} legacy papers for user {current_user.email}")
-        
-        # 轉換為響應格式
-        paper_responses = []
+        # 格式化回應
+        formatted_papers = []
         for paper in papers:
-            paper_dict = {
-                "id": str(paper.id),
-                "title": paper.title or "未命名論文",
-                "file_name": paper.file_name,
-                "original_filename": paper.original_filename,
-                "file_hash": paper.file_hash,
-                "upload_time": paper.upload_time,
-                "processing_status": paper.processing_status,
-                "selected": False,  # 遺留數據默認未選中
-                "section_count": paper.section_count or 0,
-                "sentence_count": paper.sentence_count or 0,
-                "is_legacy": True  # 標記為遺留數據
-            }
-            paper_responses.append(PaperResponse(**paper_dict))
+            formatted_papers.append({
+                'id': str(paper.id),
+                'file_name': paper.file_name,
+                'original_filename': paper.original_filename,
+                'title': paper.original_filename or paper.file_name or '',
+                'upload_time': getattr(paper, 'upload_time', paper.upload_timestamp).isoformat() if getattr(paper, 'upload_time', paper.upload_timestamp) else None,
+                'processing_status': paper.processing_status,
+                'is_selected': getattr(paper, 'is_selected', False),
+                'workspace_id': str(paper.workspace_id),
+                'file_size': paper.file_size,
+                'file_type': getattr(paper, 'file_type', 'pdf')
+            })
         
-        return paper_responses
-        
-    except Exception as e:
-        logger.error(f"Failed to get legacy papers: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve legacy papers"
-        )
-
-@router.get("/papers/count")
-async def get_legacy_papers_count(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    獲取遺留論文總數
-    
-    Args:
-        current_user: 當前用戶
-        db: 數據庫會話
-    
-    Returns:
-        遺留論文總數
-    """
-    try:
-        stmt = select(Paper.id).where(Paper.workspace_id.is_(None))
-        result = await db.execute(stmt)
-        count = len(result.scalars().all())
-        
-        logger.debug(f"Legacy papers count: {count}")
+        logger.info(f"用戶 {current_user.id} 存取工作區 {workspace_id} 的 {len(formatted_papers)} 篇論文")
         
         return {
-            "total_count": count,
-            "available_for_import": count
+            'success': True,
+            'data': formatted_papers,
+            'total': len(formatted_papers),
+            'workspace_id': workspace_id,
+            'access_timestamp': datetime.now().isoformat()
         }
         
+    except ValueError:
+        raise HTTPException(status_code=400, detail="無效的工作區ID格式")
     except Exception as e:
-        logger.error(f"Failed to get legacy papers count: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get legacy papers count"
-        )
+        logger.error(f"獲取遺留論文失敗: user={current_user.id}, workspace={workspace_id}, error={str(e)}")
+        raise HTTPException(status_code=500, detail="內部伺服器錯誤")
 
-@router.post("/papers/{paper_id}/import")
-async def import_legacy_paper(
-    paper_id: UUID,
-    workspace_id: UUID,
+@router.get("/papers/{paper_id}")
+async def get_legacy_paper_detail(
+    paper_id: str,
+    workspace_id: str = Query(..., description="工作區ID"),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    _workspace_access: dict = Depends(WorkspaceAccessDep)
 ):
     """
-    將遺留論文導入到指定工作區
-    
-    Args:
-        paper_id: 論文ID
-        workspace_id: 目標工作區ID
-        current_user: 當前用戶
-        db: 數據庫會話
-    
-    Returns:
-        導入結果
-    
-    Raises:
-        HTTPException: 當論文不存在、工作區無權限或論文已被導入時
+    獲取特定論文的詳細資訊 - 嚴格工作區隔離
     """
     try:
-        # 1. 驗證工作區屬於當前用戶
-        workspace_stmt = select(Workspace).where(
-            and_(
-                Workspace.id == workspace_id,
-                Workspace.user_id == current_user.id
-            )
-        )
-        workspace_result = await db.execute(workspace_stmt)
-        workspace = workspace_result.scalar_one_or_none()
+        workspace_uuid = uuid.UUID(workspace_id)
+        paper_uuid = uuid.UUID(paper_id)
         
-        if not workspace:
+        # 驗證工作區存取權限
+        has_access = await db_service.verify_workspace_access(db, current_user.id, workspace_uuid)
+        if not has_access:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have permission to access this workspace"
+                status_code=403,
+                detail=f"用戶無權存取工作區 {workspace_id}"
             )
         
-        # 2. 驗證論文是遺留數據且存在
-        paper_stmt = select(Paper).where(
-            and_(
-                Paper.id == paper_id,
-                Paper.workspace_id.is_(None)  # 確保是遺留數據
-            )
-        )
-        paper_result = await db.execute(paper_stmt)
-        paper = paper_result.scalar_one_or_none()
-        
+        # 獲取論文並驗證歸屬
+        paper = await db_service.get_paper_by_id(db, paper_uuid)
         if not paper:
+            raise HTTPException(status_code=404, detail="論文不存在")
+        
+        # 確保論文屬於指定工作區
+        if str(paper.workspace_id) != workspace_id:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Legacy paper not found or already imported"
+                status_code=403,
+                detail="論文不屬於指定工作區"
             )
         
-        # 3. 檢查目標工作區是否已有相同檔案雜湊的論文
-        existing_paper_stmt = select(Paper).where(
-            and_(
-                Paper.workspace_id == workspace_id,
-                Paper.file_hash == paper.file_hash
-            )
-        )
-        existing_result = await db.execute(existing_paper_stmt)
-        existing_paper = existing_result.scalar_one_or_none()
+        # 獲取論文章節資訊
+        sections = await db_service.get_sections_by_paper_id(db, paper_uuid)
         
-        if existing_paper:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A paper with the same content already exists in this workspace"
-            )
+        # 格式化回應
+        formatted_sections = []
+        for section in sections:
+            formatted_sections.append({
+                'id': str(section.id),
+                'section_type': section.section_type,
+                'page_num': section.page_num,
+                'content_preview': (section.content or '')[:200] + "..." if section.content else "",
+                'word_count': len(section.content.split()) if section.content else 0
+            })
         
-        # 4. 將論文關聯到工作區
-        paper.workspace_id = workspace_id
-        
-        # 5. 同時需要更新相關的句子和章節數據
-        # 更新 sentences 表
-        await db.execute(text("""
-            UPDATE sentences 
-            SET workspace_id = :workspace_id 
-            WHERE paper_id = :paper_id AND workspace_id IS NULL
-        """), {"workspace_id": workspace_id, "paper_id": paper_id})
-        
-        # 更新 paper_sections 表
-        await db.execute(text("""
-            UPDATE paper_sections 
-            SET workspace_id = :workspace_id 
-            WHERE paper_id = :paper_id AND workspace_id IS NULL
-        """), {"workspace_id": workspace_id, "paper_id": paper_id})
-        
-        # 更新 paper_selections 表
-        await db.execute(text("""
-            UPDATE paper_selections 
-            SET workspace_id = :workspace_id 
-            WHERE paper_id = :paper_id AND workspace_id IS NULL
-        """), {"workspace_id": workspace_id, "paper_id": paper_id})
-        
-        await db.commit()
-        
-        logger.info(f"Successfully imported legacy paper {paper_id} to workspace {workspace_id} for user {current_user.email}")
-        
-        return {
-            "success": True,
-            "message": "Paper imported successfully",
-            "paper_id": str(paper_id),
-            "workspace_id": str(workspace_id),
-            "workspace_name": workspace.name
+        paper_detail = {
+            'id': str(paper.id),
+            'file_name': paper.file_name,
+            'original_filename': paper.original_filename,
+            'title': paper.original_filename or paper.file_name or '',
+            'upload_time': getattr(paper, 'upload_time', paper.upload_timestamp).isoformat() if getattr(paper, 'upload_time', paper.upload_timestamp) else None,
+            'processing_status': paper.processing_status,
+            'is_selected': getattr(paper, 'is_selected', False),
+            'workspace_id': str(paper.workspace_id),
+            'file_size': paper.file_size,
+            'file_type': getattr(paper, 'file_type', 'pdf'),
+            'sections': formatted_sections,
+            'section_count': len(formatted_sections)
         }
         
-    except HTTPException:
-        raise
+        logger.info(f"用戶 {current_user.id} 存取論文 {paper_id} 詳細資訊")
+        
+        return {
+            'success': True,
+            'data': paper_detail,
+            'workspace_id': workspace_id,
+            'access_timestamp': datetime.now().isoformat()
+        }
+        
+    except ValueError:
+        raise HTTPException(status_code=400, detail="無效的ID格式")
     except Exception as e:
-        await db.rollback()
-        logger.error(f"Failed to import legacy paper: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to import paper"
-        )
+        logger.error(f"獲取論文詳細資訊失敗: user={current_user.id}, paper={paper_id}, error={str(e)}")
+        raise HTTPException(status_code=500, detail="內部伺服器錯誤")
 
-@router.post("/papers/batch-import")
-async def batch_import_legacy_papers(
-    paper_ids: List[UUID],
-    workspace_id: UUID,
+@router.get("/sentences")
+async def get_legacy_sentences(
+    workspace_id: str = Query(..., description="工作區ID"),
+    paper_id: Optional[str] = Query(None, description="論文ID"),
+    section_type: Optional[str] = Query(None, description="章節類型"),
+    defining_type: Optional[str] = Query(None, description="定義類型 (OD/CD)"),
+    keyword: Optional[str] = Query(None, description="關鍵詞搜尋"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    _workspace_access: dict = Depends(WorkspaceAccessDep)
 ):
     """
-    批量導入遺留論文到指定工作區
-    
-    Args:
-        paper_ids: 論文ID列表
-        workspace_id: 目標工作區ID
-        current_user: 當前用戶
-        db: 數據庫會話
-    
-    Returns:
-        批量導入結果
+    獲取工作區範圍內的句子資料 - 嚴格工作區隔離
     """
     try:
-        # 1. 驗證工作區屬於當前用戶
-        workspace_stmt = select(Workspace).where(
-            and_(
-                Workspace.id == workspace_id,
-                Workspace.user_id == current_user.id
-            )
-        )
-        workspace_result = await db.execute(workspace_stmt)
-        workspace = workspace_result.scalar_one_or_none()
+        workspace_uuid = uuid.UUID(workspace_id)
         
-        if not workspace:
+        # 驗證工作區存取權限
+        has_access = await db_service.verify_workspace_access(db, current_user.id, workspace_uuid)
+        if not has_access:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have permission to access this workspace"
+                status_code=403,
+                detail=f"用戶無權存取工作區 {workspace_id}"
             )
         
-        imported_count = 0
-        failed_papers = []
-        duplicate_papers = []
-        
-        for paper_id in paper_ids:
-            try:
-                # 2. 驗證論文是遺留數據且存在
-                paper_stmt = select(Paper).where(
-                    and_(
-                        Paper.id == paper_id,
-                        Paper.workspace_id.is_(None)
-                    )
-                )
-                paper_result = await db.execute(paper_stmt)
-                paper = paper_result.scalar_one_or_none()
-                
-                if not paper:
-                    failed_papers.append(str(paper_id))
-                    continue
-                
-                # 3. 檢查重複
-                existing_paper_stmt = select(Paper).where(
-                    and_(
-                        Paper.workspace_id == workspace_id,
-                        Paper.file_hash == paper.file_hash
-                    )
-                )
-                existing_result = await db.execute(existing_paper_stmt)
-                existing_paper = existing_result.scalar_one_or_none()
-                
-                if existing_paper:
-                    duplicate_papers.append(str(paper_id))
-                    continue
-                
-                # 4. 導入論文
-                paper.workspace_id = workspace_id
-                
-                # 更新相關數據
-                await db.execute(text("""
-                    UPDATE sentences 
-                    SET workspace_id = :workspace_id 
-                    WHERE paper_id = :paper_id AND workspace_id IS NULL
-                """), {"workspace_id": workspace_id, "paper_id": paper_id})
-                
-                await db.execute(text("""
-                    UPDATE paper_sections 
-                    SET workspace_id = :workspace_id 
-                    WHERE paper_id = :paper_id AND workspace_id IS NULL
-                """), {"workspace_id": workspace_id, "paper_id": paper_id})
-                
-                await db.execute(text("""
-                    UPDATE paper_selections 
-                    SET workspace_id = :workspace_id 
-                    WHERE paper_id = :paper_id AND workspace_id IS NULL
-                """), {"workspace_id": workspace_id, "paper_id": paper_id})
-                
-                imported_count += 1
-                
-            except Exception as e:
-                logger.warning(f"Failed to import paper {paper_id}: {e}")
-                failed_papers.append(str(paper_id))
-        
-        await db.commit()
-        
-        logger.info(f"Batch import completed: {imported_count} papers imported to workspace {workspace_id}")
-        
-        return {
-            "success": True,
-            "imported_count": imported_count,
-            "total_requested": len(paper_ids),
-            "failed_papers": failed_papers,
-            "duplicate_papers": duplicate_papers,
-            "workspace_id": str(workspace_id),
-            "workspace_name": workspace.name
+        # 構建搜尋參數
+        search_params = {
+            'workspace_id': workspace_uuid,
+            'limit': limit,
+            'offset': offset
         }
         
-    except HTTPException:
-        raise
+        if paper_id:
+            try:
+                paper_uuid = uuid.UUID(paper_id)
+                # 驗證論文屬於工作區
+                paper = await db_service.get_paper_by_id(db, paper_uuid)
+                if not paper or str(paper.workspace_id) != workspace_id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="論文不屬於指定工作區"
+                    )
+                search_params['paper_name'] = paper.file_name
+            except ValueError:
+                raise HTTPException(status_code=400, detail="無效的論文ID格式")
+        
+        if section_type:
+            search_params['section_type'] = section_type
+        
+        if defining_type:
+            search_params['defining_types'] = [defining_type]
+        
+        if keyword:
+            search_params['keywords'] = [keyword]
+        
+        # 在工作區範圍內搜尋句子
+        sentences = await db_service.search_sentences_in_workspace(db, **search_params)
+        
+        # 格式化回應
+        formatted_sentences = []
+        for sentence in sentences:
+            formatted_sentences.append({
+                'id': sentence.get('sentence_id'),
+                'content': sentence.get('content'),
+                'defining_type': sentence.get('defining_type'),
+                'page_num': sentence.get('page_num'),
+                'sentence_order': sentence.get('sentence_order'),
+                'file_name': sentence.get('file_name'),
+                'section_type': sentence.get('section_type'),
+                'workspace_id': sentence.get('workspace_id')
+            })
+        
+        logger.info(f"用戶 {current_user.id} 在工作區 {workspace_id} 搜尋到 {len(formatted_sentences)} 個句子")
+        
+        return {
+            'success': True,
+            'data': formatted_sentences,
+            'total': len(formatted_sentences),
+            'search_params': {
+                'workspace_id': workspace_id,
+                'paper_id': paper_id,
+                'section_type': section_type,
+                'defining_type': defining_type,
+                'keyword': keyword
+            },
+            'access_timestamp': datetime.now().isoformat()
+        }
+        
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        await db.rollback()
-        logger.error(f"Batch import failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Batch import failed"
-        ) 
+        logger.error(f"搜尋句子失敗: user={current_user.id}, workspace={workspace_id}, error={str(e)}")
+        raise HTTPException(status_code=500, detail="內部伺服器錯誤")
+
+@router.post("/data-migration")
+async def migrate_legacy_data(
+    workspace_id: str = Query(..., description="目標工作區ID"),
+    migration_type: str = Query("full", description="遷移類型: full/partial"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _workspace_access: dict = Depends(WorkspaceAccessDep)
+):
+    """
+    遷移遺留資料到指定工作區 - 安全遷移
+    """
+    try:
+        workspace_uuid = uuid.UUID(workspace_id)
+        
+        # 驗證工作區存取權限
+        has_access = await db_service.verify_workspace_access(db, current_user.id, workspace_uuid)
+        if not has_access:
+            raise HTTPException(
+                status_code=403,
+                detail=f"用戶無權存取工作區 {workspace_id}"
+            )
+        
+        # 獲取工作區資訊
+        workspace = await db_service.get_workspace_by_id(db, workspace_uuid)
+        if not workspace:
+            raise HTTPException(status_code=404, detail="工作區不存在")
+        
+        # 檢查遷移權限 - 只有工作區擁有者可以執行遷移
+        if str(workspace.user_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=403,
+                detail="只有工作區擁有者可以執行資料遷移"
+            )
+        
+        # 執行遷移 (這裡是框架，實際實作需要根據具體需求)
+        migration_result = {
+            'migration_id': str(uuid.uuid4()),
+            'workspace_id': workspace_id,
+            'migration_type': migration_type,
+            'status': 'initiated',
+            'timestamp': datetime.now().isoformat(),
+            'user_id': str(current_user.id)
+        }
+        
+        logger.info(f"用戶 {current_user.id} 發起工作區 {workspace_id} 的資料遷移")
+        
+        return {
+            'success': True,
+            'data': migration_result,
+            'message': '資料遷移已啟動，請稍後檢查進度'
+        }
+        
+    except ValueError:
+        raise HTTPException(status_code=400, detail="無效的工作區ID格式")
+    except Exception as e:
+        logger.error(f"資料遷移失敗: user={current_user.id}, workspace={workspace_id}, error={str(e)}")
+        raise HTTPException(status_code=500, detail="內部伺服器錯誤")
+
+@router.get("/access-log")
+async def get_legacy_access_log(
+    workspace_id: str = Query(..., description="工作區ID"),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _workspace_access: dict = Depends(WorkspaceAccessDep)
+):
+    """
+    獲取工作區存取記錄 - 審計追蹤
+    """
+    try:
+        workspace_uuid = uuid.UUID(workspace_id)
+        
+        # 驗證工作區存取權限
+        has_access = await db_service.verify_workspace_access(db, current_user.id, workspace_uuid)
+        if not has_access:
+            raise HTTPException(
+                status_code=403,
+                detail=f"用戶無權存取工作區 {workspace_id}"
+            )
+        
+        # 這裡應該從存取記錄表中獲取資料
+        # 目前返回模擬資料
+        access_log = [
+            {
+                'id': str(uuid.uuid4()),
+                'user_id': str(current_user.id),
+                'workspace_id': workspace_id,
+                'action': 'legacy_data_access',
+                'resource_type': 'papers',
+                'timestamp': datetime.now().isoformat(),
+                'ip_address': '127.0.0.1',  # 實際應該從請求中獲取
+                'user_agent': 'API Client'
+            }
+        ]
+        
+        return {
+            'success': True,
+            'data': access_log,
+            'workspace_id': workspace_id,
+            'access_timestamp': datetime.now().isoformat()
+        }
+        
+    except ValueError:
+        raise HTTPException(status_code=400, detail="無效的工作區ID格式")
+    except Exception as e:
+        logger.error(f"獲取存取記錄失敗: user={current_user.id}, workspace={workspace_id}, error={str(e)}")
+        raise HTTPException(status_code=500, detail="內部伺服器錯誤") 

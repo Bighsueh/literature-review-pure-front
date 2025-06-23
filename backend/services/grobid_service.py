@@ -38,16 +38,38 @@ class GrobidService:
     async def health_check(self) -> bool:
         """檢查Grobid服務健康狀態"""
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.get(f"{self.base_url}/api/isalive") as response:
+            # 使用更寬鬆的超時設定，並禁用SSL驗證以避免憑證問題
+            timeout = aiohttp.ClientTimeout(total=15, connect=10)
+            connector = aiohttp.TCPConnector(ssl=False, limit=10, limit_per_host=5)
+            
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                health_url = f"{self.base_url}/api/isalive"
+                logger.info(f"正在檢查Grobid健康狀態: {health_url}")
+                
+                async with session.get(health_url) as response:
+                    response_text = await response.text()
+                    logger.info(f"Grobid健康檢查回應: 狀態={response.status}, 內容='{response_text}'")
+                    
                     if response.status == 200:
-                        logger.info("Grobid服務健康檢查通過")
-                        return True
+                        # 檢查回應內容是否為預期的 "true"
+                        if response_text.strip().lower() in ['true', 'ok', 'alive']:
+                            logger.info("Grobid服務健康檢查通過")
+                            return True
+                        else:
+                            logger.warning(f"Grobid服務回應異常內容: {response_text}")
+                            return False
                     else:
                         logger.warning(f"Grobid服務健康檢查失敗，狀態碼: {response.status}")
                         return False
+                        
+        except aiohttp.ClientConnectorError as e:
+            logger.error(f"Grobid服務連接失敗 (DNS/網路問題): {e}")
+            return False
+        except aiohttp.ServerTimeoutError as e:
+            logger.error(f"Grobid服務健康檢查超時: {e}")
+            return False
         except Exception as e:
-            logger.error(f"Grobid服務健康檢查失敗: {e}")
+            logger.error(f"Grobid服務健康檢查失敗: {type(e).__name__}: {e}")
             return False
     
     async def process_pdf_to_tei(self, pdf_path: str) -> Optional[str]:
@@ -85,7 +107,11 @@ class GrobidService:
     async def _call_grobid_api(self, pdf_path: str) -> Optional[str]:
         """實際呼叫Grobid API"""
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            # 使用與健康檢查相同的連接器配置
+            timeout = aiohttp.ClientTimeout(total=300, connect=10)
+            connector = aiohttp.TCPConnector(ssl=False, limit=10, limit_per_host=5)
+            
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 # 準備檔案上傳
                 async with aiofiles.open(pdf_path, 'rb') as f:
                     pdf_content = await f.read()
@@ -103,21 +129,29 @@ class GrobidService:
                 
                 # 呼叫processFulltextDocument API
                 url = f"{self.base_url}/api/processFulltextDocument"
+                logger.info(f"呼叫Grobid API: {url}, 檔案大小: {len(pdf_content)} bytes")
+                
                 async with session.post(url, data=data) as response:
                     if response.status == 200:
                         tei_xml = await response.text()
-                        logger.debug(f"成功獲得TEI XML，長度: {len(tei_xml)} 字符")
+                        logger.info(f"成功獲得TEI XML，長度: {len(tei_xml)} 字符")
                         return tei_xml
                     else:
                         error_text = await response.text()
-                        logger.error(f"Grobid API呼叫失敗，狀態碼: {response.status}, 錯誤: {error_text}")
+                        logger.error(f"Grobid API呼叫失敗，狀態碼: {response.status}, 錯誤: {error_text[:500]}...")
                         return None
                         
+        except aiohttp.ClientConnectorError as e:
+            logger.error(f"Grobid API連接失敗 (DNS/網路問題): {e}")
+            return None
+        except aiohttp.ServerTimeoutError as e:
+            logger.error(f"Grobid API呼叫超時: {e}")
+            return None
         except asyncio.TimeoutError:
             logger.error("Grobid API呼叫超時")
             return None
         except Exception as e:
-            logger.error(f"Grobid API呼叫異常: {e}")
+            logger.error(f"Grobid API呼叫異常: {type(e).__name__}: {e}")
             raise
     
     # ===== TEI XML解析 =====

@@ -23,17 +23,17 @@ const getEnvNumber = (key: string, defaultValue: number): number => {
 // API 基礎配置
 export const API_CONFIG = {
   // 主要 API 配置 - 更新為新的後端結構
-  API_BASE_URL: getEnvVar('VITE_API_BASE_URL', 'http://localhost:8000/api'),
+  API_BASE_URL: getEnvVar('VITE_API_BASE_URL', 'http://localhost:28001/api'),
   API_TIMEOUT: getEnvNumber('VITE_API_TIMEOUT', 30000),
   
   // WebSocket 配置
-  WS_BASE_URL: getEnvVar('VITE_WS_BASE_URL', 'ws://localhost:8000'),
+  WS_BASE_URL: getEnvVar('VITE_WS_BASE_URL', 'ws://localhost:28001'),
   
   // Split Sentences 服務配置
   SPLIT_SENTENCES_BASE_URL: getEnvVar('VITE_SPLIT_SENTENCES_BASE_URL', 'http://localhost:28000'),
   
   // 認證配置
-  AUTH_BASE_URL: getEnvVar('VITE_AUTH_BASE_URL', 'http://localhost:8000'),
+  AUTH_BASE_URL: getEnvVar('VITE_AUTH_BASE_URL', 'http://localhost:28001'),
   GOOGLE_OAUTH_CLIENT_ID: getEnvVar('VITE_GOOGLE_OAUTH_CLIENT_ID', ''),
   
   // 功能開關

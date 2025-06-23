@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useWorkspaceContext } from '../../contexts/WorkspaceContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { WorkspaceApiService } from '../../services/workspace_api_service';
 import Modal from '../common/Modal/Modal';
 import LoadingSpinner from '../common/LoadingSpinner';
@@ -35,7 +35,7 @@ const WorkspaceSettings: React.FC<WorkspaceSettingsProps> = ({
     refreshWorkspaces,
     deleteWorkspace,
     updateWorkspace 
-  } = useWorkspaceContext();
+  } = useWorkspace();
   
   const [activeTab, setActiveTab] = useState<'general' | 'stats' | 'danger'>('general');
   const [isLoading, setIsLoading] = useState(false);

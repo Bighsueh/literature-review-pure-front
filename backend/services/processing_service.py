@@ -124,17 +124,20 @@ class ProcessingService:
         from ..core.database import AsyncSessionLocal
         session = AsyncSessionLocal()
         try:
-            # 獲取最新的論文狀態
+            # 獲取最新的論文狀態 (加鎖避免併發)
             paper = await db_service.get_paper_by_id(session, file_id)
             if not paper:
                 raise ValueError(f"處理開始時找不到論文記錄: {file_id}")
 
-            # 步驟 1: Grobid TEI 解析
-            if not paper.grobid_processed:
+            # 驗證檔案並獲取檔案資訊（在所有步驟開始前）
+            file_info = await self._validate_file(file_id)
+            logger.info(f"檔案驗證完成: {file_id} - 檔案路徑: {file_info['file_path']}")
+
+            # ===== 步驟 1: Grobid TEI 解析 =====
+            if (not paper.grobid_processed) or (not paper.tei_xml):
                 await queue_service.update_progress(task.task_id, step_name="Grobid TEI 解析")
-                file_info = await self._validate_file(file_id)
                 grobid_result = await self._process_with_grobid(file_info)
-                
+
                 # 增量儲存 Grobid 結果
                 await db_service.update_paper_grobid_results(
                     session,
@@ -143,19 +146,21 @@ class ProcessingService:
                     status="processing"
                 )
                 await session.commit()
+                # 重新載入 paper
                 paper = await db_service.get_paper_by_id(session, file_id)
                 logger.info(f"[進度] Grobid 處理完成並已儲存: {file_id}")
-            
-            # 步驟 2: 章節與句子提取
+            else:
+                logger.info(f"已存在 Grobid 結果，跳過 TEI 解析: {file_id}")
+
+            # ===== 步驟 2: 章節與句子提取 =====
             if not paper.sentences_processed:
                 await queue_service.update_progress(task.task_id, step_name="章節與句子提取")
-                grobid_xml = paper.tei_xml
-                if not grobid_xml:
-                    raise ValueError(f"無法從資料庫獲取 TEI XML: {file_id}")
-                
+
+                # 透過重試機制確保能拿到 TEI XML
+                grobid_xml = await self._get_tei_xml_with_retry(session, file_id)
+
                 # 使用 grobid_service 解析 XML 以獲取章節
-                # 傳遞 PDF 路徑以進行頁碼分析
-                pdf_path = f"./temp_files/{paper.file_name}"
+                pdf_path = file_info["file_path"]
                 sections = await grobid_service.parse_sections_from_xml(grobid_xml, pdf_path)
                 if not sections:
                     raise ValueError(f"從 TEI XML 解析章節失敗: {file_id}")
@@ -210,7 +215,8 @@ class ProcessingService:
             else:
                 # 步驟 2.5: 頁碼更新（可恢復流程中的額外步驟）
                 await queue_service.update_progress(task.task_id, step_name="頁碼資訊更新")
-                pdf_path = f"./temp_files/{paper.file_name}"
+                # 修復路徑問題 - 重用之前驗證過的檔案路徑
+                pdf_path = file_info["file_path"]
                 
                 # 檢查是否需要更新頁碼（如果所有章節的頁碼都是 NULL）
                 existing_sections = await db_service.get_sections_for_paper(session, file_id)
@@ -269,7 +275,6 @@ class ProcessingService:
             await db_service.update_paper_status(session, file_id, "completed")
             
             # 清理暫存檔案
-            file_info = await self._validate_file(file_id) # 重新驗證以獲取路徑
             await self._cleanup_temp_files(file_info)
 
             logger.info(f"檔案處理完成: {file_id}")
@@ -442,28 +447,69 @@ class ProcessingService:
                 if paper.processing_status == "error":
                     logger.warning(f"檔案狀態為錯誤，停止處理: {file_id} - {paper.error_message}")
                     await self._cleanup_failed_task(file_id)
-                    raise ValueError(f"檔案狀態為錯誤: {paper.error_message}")
+                    # 避免錯誤訊息疊加，直接使用原始錯誤訊息
+                    original_error = paper.error_message or "檔案處理失敗"
+                    # 提取最初的錯誤訊息（去除疊加的前綴）
+                    if "檔案狀態為錯誤:" in original_error:
+                        # 找到最後一個實際錯誤訊息
+                        parts = original_error.split("檔案狀態為錯誤:")
+                        original_error = parts[-1].strip()
+                    raise ValueError(original_error)
                 
-                # 構建檔案路徑（假設檔案存儲在暫存目錄中）
-                file_path = os.path.join(settings.temp_files_dir, paper.file_name)
+                # 修復：支援工作區化的檔案路徑
+                # 先嘗試工作區化路徑，再嘗試傳統路徑
+                possible_paths = []
                 
-                if not os.path.exists(file_path):
-                    logger.error(f"檔案實體不存在: {file_path}")
-                    logger.error(f"Paper記錄: file_name={paper.file_name}, status={paper.processing_status}")
+                # 1. 工作區化路徑（新版）
+                if paper.workspace_id:
+                    workspace_path = os.path.join(settings.temp_files_dir, str(paper.workspace_id), paper.file_name)
+                    possible_paths.append(workspace_path)
+                
+                # 2. 傳統路徑（舊版相容）
+                traditional_path = os.path.join(settings.temp_files_dir, paper.file_name)
+                possible_paths.append(traditional_path)
+                
+                # 3. 用檔案雜湊值搜尋相符的檔案
+                if paper.file_hash:
+                    import glob
+                    # 搜尋所有可能的檔案路徑
+                    hash_pattern = os.path.join(settings.temp_files_dir, "**", f"{paper.file_hash}_*.pdf")
+                    matching_files = glob.glob(hash_pattern, recursive=True)
+                    possible_paths.extend(matching_files)
+                
+                # 找到第一個存在的檔案
+                file_path = None
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        file_path = path
+                        logger.info(f"找到檔案: {file_path}")
+                        break
+                
+                if not file_path:
+                    logger.error(f"檔案實體不存在，已嘗試以下路徑:")
+                    for i, path in enumerate(possible_paths, 1):
+                        logger.error(f"  {i}. {path}")
                     
                     # 列出 temp_files 目錄內容用於調試
                     try:
                         files = os.listdir(settings.temp_files_dir)
                         logger.error(f"temp_files 目錄內容 (前10個): {files[:10]}")
+                        
+                        # 如果有工作區，也列出工作區目錄內容
+                        if paper.workspace_id:
+                            workspace_dir = os.path.join(settings.temp_files_dir, str(paper.workspace_id))
+                            if os.path.exists(workspace_dir):
+                                workspace_files = os.listdir(workspace_dir)
+                                logger.error(f"工作區目錄內容: {workspace_files[:10]}")
                     except Exception as e:
-                        logger.error(f"無法列出 temp_files 目錄: {e}")
+                        logger.error(f"無法列出目錄內容: {e}")
                     
                     # 更新資料庫狀態為錯誤
                     await db_service.update_paper_status(
-                        db, file_id, "error", f"檔案實體不存在: {file_path}"
+                        db, file_id, "error", f"檔案實體不存在，已嘗試 {len(possible_paths)} 個路徑"
                     )
                     await self._cleanup_failed_task(file_id)
-                    raise ValueError(f"檔案實體不存在: {file_path}")
+                    raise ValueError(f"檔案實體不存在，已嘗試 {len(possible_paths)} 個路徑")
                 
                 # 構建檔案資訊字典，與原 file_service 格式相容
                 file_info = {
@@ -931,111 +977,165 @@ class ProcessingService:
             logger.warning(f"清理暫存檔案失敗: {e}")
     
     async def _verify_processing_completion(self, db: AsyncSession, paper_id: str) -> Dict[str, Any]:
-        """驗證論文處理是否真正完成 - 關鍵的資料一致性檢查"""
+        """驗證論文處理是否真正完成 - 關鍵的資料一致性檢查（增強版）"""
         try:
-            # 1. 檢查論文記錄
-            paper = await db_service.get_paper_by_id(db, paper_id)
-            if not paper:
-                return {"success": False, "error": "論文記錄不存在"}
+            # 🔄 增加重試機制來處理事務隔離問題
+            max_retries = 3
+            retry_delay = 1.0
             
-            # 2. 檢查 TEI XML
-            if not paper.tei_xml or len(paper.tei_xml) < 1000:  # TEI XML 至少應該有基本結構
-                return {"success": False, "error": "TEI XML 缺失或太短"}
+            for attempt in range(max_retries):
+                try:
+                    # 🛡️ 強制刷新會話，確保讀取最新數據
+                    if hasattr(db, 'expire_all'):
+                        db.expire_all()
+                    
+                    # 1. 檢查論文記錄（使用 fresh 查詢）
+                    from sqlalchemy import text
+                    fresh_paper_query = text("""
+                        SELECT id, tei_xml, grobid_processed, sentences_processed, od_cd_processed, processing_status
+                        FROM papers 
+                        WHERE id = :paper_id
+                    """)
+                    result = await db.execute(fresh_paper_query, {"paper_id": paper_id})
+                    paper_row = result.fetchone()
+                    
+                    if not paper_row:
+                        return {"success": False, "error": "論文記錄不存在"}
+                    
+                    paper_id_db, tei_xml, grobid_processed, sentences_processed, od_cd_processed, processing_status = paper_row
+                    
+                    # 📊 詳細診斷日誌
+                    logger.info(f"[驗證] 嘗試 {attempt + 1}/{max_retries} - 論文 {paper_id}")
+                    logger.info(f"[驗證] TEI XML 長度: {len(tei_xml) if tei_xml else 0}")
+                    logger.info(f"[驗證] 處理狀態: grobid={grobid_processed}, sentences={sentences_processed}, od_cd={od_cd_processed}")
+                    logger.info(f"[驗證] 處理狀態標記: {processing_status}")
+                    
+                    # 2. 檢查 TEI XML
+                    if not tei_xml or len(tei_xml) < 1000:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"[驗證] TEI XML 檢查失敗 (嘗試 {attempt + 1}): 長度={len(tei_xml) if tei_xml else 0}, 重試中...")
+                            await asyncio.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error(f"[驗證] TEI XML 最終檢查失敗: 長度={len(tei_xml) if tei_xml else 0}")
+                            return {"success": False, "error": "TEI XML 缺失或太短"}
+                    
+                    # 3. 檢查章節資料（使用 fresh 查詢）
+                    sections_query = text("SELECT COUNT(*) FROM paper_sections WHERE paper_id = :paper_id")
+                    sections_result = await db.execute(sections_query, {"paper_id": paper_id})
+                    actual_sections = sections_result.scalar()
+                    
+                    logger.info(f"[驗證] 章節數量: {actual_sections}")
+                    
+                    if actual_sections == 0:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"[驗證] 章節檢查失敗 (嘗試 {attempt + 1}): 數量=0, 重試中...")
+                            await asyncio.sleep(retry_delay)
+                            continue
+                        else:
+                            return {"success": False, "error": "章節資料完全缺失"}
+                    
+                    # 4. 檢查句子資料（使用 fresh 查詢）
+                    sentences_query = text("SELECT COUNT(*) FROM sentences WHERE paper_id = :paper_id")
+                    sentences_result = await db.execute(sentences_query, {"paper_id": paper_id})
+                    actual_sentences = sentences_result.scalar()
+                    
+                    logger.info(f"[驗證] 句子數量: {actual_sentences}")
+                    
+                    if actual_sentences == 0:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"[驗證] 句子檢查失敗 (嘗試 {attempt + 1}): 數量=0, 重試中...")
+                            await asyncio.sleep(retry_delay)
+                            continue
+                        else:
+                            return {"success": False, "error": "句子資料完全缺失"}
+                    
+                    # 5. 檢查章節和句子的關聯性
+                    orphan_query = text("""
+                        SELECT COUNT(*) FROM sentences s 
+                        WHERE s.paper_id = :paper_id 
+                        AND s.section_id NOT IN (
+                            SELECT ps.id FROM paper_sections ps WHERE ps.paper_id = :paper_id
+                        )
+                    """)
+                    orphan_result = await db.execute(orphan_query, {"paper_id": paper_id})
+                    orphan_sentences = orphan_result.scalar()
+                    
+                    if orphan_sentences > 0:
+                        logger.warning(f"[驗證] 發現 {orphan_sentences} 個孤立句子")
+                        if orphan_sentences > actual_sentences * 0.5:  # 超過50%才算錯誤
+                            return {"success": False, "error": f"過多孤立句子: {orphan_sentences}/{actual_sentences}"}
+                    
+                    # 6. 檢查處理狀態標記
+                    if not grobid_processed:
+                        logger.error(f"[驗證] Grobid 處理狀態未標記為完成: {grobid_processed}")
+                        return {"success": False, "error": "Grobid 處理狀態未標記為完成"}
+                    
+                    if not sentences_processed:
+                        logger.error(f"[驗證] 句子處理狀態未標記為完成: {sentences_processed}")
+                        return {"success": False, "error": "句子處理狀態未標記為完成"}
+                    
+                    # 7. 檢查內容質量
+                    empty_sections_query = text("""
+                        SELECT COUNT(*) FROM paper_sections 
+                        WHERE paper_id = :paper_id AND (content IS NULL OR LENGTH(content) < 10)
+                    """)
+                    empty_sections_result = await db.execute(empty_sections_query, {"paper_id": paper_id})
+                    empty_sections = empty_sections_result.scalar()
+                    
+                    if empty_sections > actual_sections * 0.5:
+                        logger.warning(f"[驗證] 過多空白章節: {empty_sections}/{actual_sections}")
+                        return {"success": False, "error": f"過多空白章節: {empty_sections}/{actual_sections}"}
+                    
+                    # 8. 檢查句子內容質量
+                    empty_sentences_query = text("""
+                        SELECT COUNT(*) FROM sentences 
+                        WHERE paper_id = :paper_id AND (content IS NULL OR LENGTH(content) < 5)
+                    """)
+                    empty_sentences_result = await db.execute(empty_sentences_query, {"paper_id": paper_id})
+                    empty_sentences = empty_sentences_result.scalar()
+                    
+                    if empty_sentences > actual_sentences * 0.3:
+                        logger.warning(f"[驗證] 過多空白句子: {empty_sentences}/{actual_sentences}")
+                        return {"success": False, "error": f"過多空白句子: {empty_sentences}/{actual_sentences}"}
+                    
+                    # 🎉 所有檢查通過
+                    summary = {
+                        "paper_id": paper_id,
+                        "tei_xml_length": len(tei_xml),
+                        "sections_count": actual_sections,
+                        "sentences_count": actual_sentences,
+                        "empty_sections": empty_sections,
+                        "empty_sentences": empty_sentences,
+                        "orphan_sentences": orphan_sentences,
+                        "grobid_processed": grobid_processed,
+                        "sentences_processed": sentences_processed,
+                        "od_cd_processed": od_cd_processed,
+                        "verification_attempts": attempt + 1
+                    }
+                    
+                    logger.info(f"[驗證] ✅ 驗證成功 (嘗試 {attempt + 1}): {actual_sections} 章節, {actual_sentences} 句子")
+                    
+                    return {
+                        "success": True, 
+                        "summary": f"驗證通過: {actual_sections} 章節, {actual_sentences} 句子 (重試 {attempt + 1} 次)",
+                        "details": summary
+                    }
+                    
+                except Exception as retry_error:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"[驗證] 嘗試 {attempt + 1} 發生錯誤，重試中: {retry_error}")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # 指數退避
+                        continue
+                    else:
+                        raise retry_error
             
-            # 3. 檢查章節資料
-            sections_query = select(func.count(PaperSection.id)).where(PaperSection.paper_id == paper_id)
-            sections_count = await db.execute(sections_query)
-            actual_sections = sections_count.scalar()
-            
-            if actual_sections == 0:
-                return {"success": False, "error": "章節資料完全缺失"}
-            
-            # 4. 檢查句子資料
-            sentences_query = select(func.count(Sentence.id)).where(Sentence.paper_id == paper_id)
-            sentences_count = await db.execute(sentences_query)
-            actual_sentences = sentences_count.scalar()
-            
-            if actual_sentences == 0:
-                return {"success": False, "error": "句子資料完全缺失"}
-            
-            # 5. 檢查章節和句子的關聯性
-            orphan_sentences_query = select(func.count(Sentence.id)).where(
-                and_(
-                    Sentence.paper_id == paper_id,
-                    ~Sentence.section_id.in_(
-                        select(PaperSection.id).where(PaperSection.paper_id == paper_id)
-                    )
-                )
-            )
-            orphan_sentences_count = await db.execute(orphan_sentences_query)
-            orphan_sentences = orphan_sentences_count.scalar()
-            
-            if orphan_sentences > 0:
-                return {"success": False, "error": f"發現 {orphan_sentences} 個孤立句子（沒有對應章節）"}
-            
-            # 6. 檢查處理狀態標記
-            if not paper.grobid_processed:
-                logger.error(f"驗證失敗 - Grobid 處理狀態: {paper.grobid_processed}")
-                return {"success": False, "error": "Grobid 處理狀態未標記為完成"}
-            
-            if not paper.sentences_processed:
-                logger.error(f"驗證失敗 - 句子處理狀態: {paper.sentences_processed}")
-                logger.error(f"論文詳細狀態: grobid_processed={paper.grobid_processed}, sentences_processed={paper.sentences_processed}, od_cd_processed={paper.od_cd_processed}, processing_status={paper.processing_status}")
-                return {"success": False, "error": "句子處理狀態未標記為完成"}
-            
-            # 7. 檢查章節內容質量
-            empty_sections_query = select(func.count(PaperSection.id)).where(
-                and_(
-                    PaperSection.paper_id == paper_id,
-                    or_(
-                        PaperSection.content.is_(None),
-                        func.length(PaperSection.content) < 10
-                    )
-                )
-            )
-            empty_sections_count = await db.execute(empty_sections_query)
-            empty_sections = empty_sections_count.scalar()
-            
-            if empty_sections > actual_sections * 0.5:  # 如果超過50%的章節內容為空
-                return {"success": False, "error": f"過多空白章節: {empty_sections}/{actual_sections}"}
-            
-            # 8. 檢查句子內容質量
-            empty_sentences_query = select(func.count(Sentence.id)).where(
-                and_(
-                    Sentence.paper_id == paper_id,
-                    or_(
-                        Sentence.content.is_(None),
-                        func.length(Sentence.content) < 5
-                    )
-                )
-            )
-            empty_sentences_count = await db.execute(empty_sentences_query)
-            empty_sentences = empty_sentences_count.scalar()
-            
-            if empty_sentences > actual_sentences * 0.3:  # 如果超過30%的句子內容為空
-                return {"success": False, "error": f"過多空白句子: {empty_sentences}/{actual_sentences}"}
-            
-            # 9. 構建成功摘要
-            summary = {
-                "paper_id": paper_id,
-                "tei_xml_length": len(paper.tei_xml),
-                "sections_count": actual_sections,
-                "sentences_count": actual_sentences,
-                "empty_sections": empty_sections,
-                "empty_sentences": empty_sentences,
-                "grobid_processed": paper.grobid_processed,
-                "sentences_processed": paper.sentences_processed,
-                "od_cd_processed": paper.od_cd_processed
-            }
-            
-            return {
-                "success": True, 
-                "summary": f"驗證通過: {actual_sections} 章節, {actual_sentences} 句子",
-                "details": summary
-            }
+            # 如果所有重試都失敗
+            return {"success": False, "error": f"驗證失敗，已重試 {max_retries} 次"}
             
         except Exception as e:
-            logger.error(f"處理完成驗證時發生錯誤: {e}", exc_info=True)
+            logger.error(f"[驗證] 處理完成驗證時發生錯誤: {e}", exc_info=True)
             return {"success": False, "error": f"驗證過程發生錯誤: {str(e)}"}
     
     # ===== 批次處理功能 =====
@@ -1287,6 +1387,17 @@ class ProcessingService:
         except Exception as e:
             logger.error(f"確定章節頁碼失敗: {e}")
             return max(1, (section_index // 2) + 1)  # 備用方案
+
+    async def _get_tei_xml_with_retry(self, session: AsyncSession, paper_id: str, max_retries: int = 5, delay: float = 1.0) -> str:
+        """嘗試從資料庫取得 TEI XML，避免因交易未提交造成讀取失敗"""
+        for attempt in range(max_retries):
+            tei_xml = await db_service.get_paper_tei_xml(session, paper_id)
+            if tei_xml:
+                return tei_xml
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay)
+            else:
+                raise ValueError(f"無法從資料庫獲取 TEI XML (重試 {max_retries} 次後失敗): {paper_id}")
 
 # 建立服務實例
 processing_service = ProcessingService()

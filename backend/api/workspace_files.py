@@ -5,6 +5,7 @@ from uuid import UUID
 import asyncio
 from datetime import datetime
 import os
+from dataclasses import asdict
 
 from ..core.database import get_db
 from ..api.dependencies import get_workspace_for_user, get_current_user
@@ -38,11 +39,11 @@ async def upload_file_to_workspace(
         # 1. 驗證檔案
         is_valid, error_message = await file_service.validate_file(file)
         if not is_valid:
-            raise APIError(
-                error_code=ErrorCodes.VALIDATION_ERROR,
-                detail=error_message,
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
+                    raise APIError(
+            error_code=ErrorCodes.VALIDATION_ERROR,
+            message=error_message,
+            status_code=status.HTTP_400_BAD_REQUEST
+        )
         
         # 2. 計算檔案雜湊值
         file_hash = await file_service.calculate_file_hash(file)
@@ -113,7 +114,7 @@ async def upload_file_to_workspace(
         logger.error(f"檔案上傳失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"檔案上傳失敗: {str(e)}",
+            message=f"檔案上傳失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -133,11 +134,11 @@ async def upload_multiple_files_to_workspace(
         total_files = len(files)
         
         if total_files > 10:  # 限制批次上傳數量
-            raise APIError(
-                error_code=ErrorCodes.VALIDATION_ERROR,
-                detail="批次上傳最多支援10個檔案",
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
+                    raise APIError(
+            error_code=ErrorCodes.VALIDATION_ERROR,
+            message="批次上傳最多支援10個檔案",
+            status_code=status.HTTP_400_BAD_REQUEST
+        )
         
         for i, file in enumerate(files):
             try:
@@ -241,11 +242,89 @@ async def upload_multiple_files_to_workspace(
         logger.error(f"批次上傳失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"批次上傳失敗: {str(e)}",
+            message=f"批次上傳失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 # ===== 檔案管理 =====
+
+
+
+@router.get("/selected-sentences")
+async def get_selected_workspace_files_sentences(
+    workspace_id: UUID,
+    workspace: Workspace = Depends(get_workspace_for_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    獲取工作區中所有選中檔案的句子
+    """
+    try:
+        # 1. 獲取工作區中選中的檔案
+        selected_papers = await db_service.get_selected_papers_by_workspace(db, workspace_id)
+        
+        if not selected_papers:
+            return {
+                "success": True,
+                "sentences": [],
+                "total_sentences": 0,
+                "total_papers": 0,
+                "papers": []
+            }
+        
+        # 2. 獲取所有選中檔案的句子
+        from sqlalchemy import select
+        from ..models.paper import Sentence
+        
+        all_sentences = []
+        papers_info = []
+        
+        for paper in selected_papers:
+            # 獲取該論文的句子
+            query = select(Sentence).where(Sentence.paper_id == paper.id)
+            result = await db.execute(query)
+            sentences = result.scalars().all()
+            
+            # 格式化句子資料
+            for sentence in sentences:
+                all_sentences.append({
+                    "id": str(sentence.id),
+                    "content": sentence.content,
+                    "type": sentence.defining_type or "regular",
+                    "reason": getattr(sentence, 'explanation', None),
+                    "pageNumber": sentence.page_num,
+                    "fileName": paper.file_name,
+                    "fileId": str(paper.id),
+                    "sentenceOrder": sentence.sentence_order,
+                    "sectionId": sentence.section_id,
+                    "confidence": getattr(sentence, 'confidence', None),
+                    "wordCount": len(sentence.content.split()) if sentence.content else 0
+                })
+            
+            # 收集論文資訊
+            papers_info.append({
+                "id": str(paper.id),
+                "fileName": paper.file_name,
+                "processing_status": paper.processing_status
+            })
+        
+        logger.info(f"工作區 {workspace_id} 獲取選中檔案句子: {len(all_sentences)} 個句子，來自 {len(selected_papers)} 個檔案")
+        
+        return {
+            "success": True,
+            "sentences": all_sentences,
+            "total_sentences": len(all_sentences),
+            "total_papers": len(selected_papers),
+            "papers": papers_info
+        }
+        
+    except Exception as e:
+        logger.error(f"獲取工作區選中檔案句子失敗: {str(e)}")
+        raise APIError(
+            error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
+            message=f"獲取工作區選中檔案句子失敗: {str(e)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @router.get("/", response_model=PaginatedResponse[PaperResponse])
 async def get_workspace_files(
@@ -269,78 +348,69 @@ async def get_workspace_files(
         logger.error(f"取得工作區檔案列表失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"取得檔案列表失敗: {str(e)}",
+            message=f"取得檔案列表失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
-@router.get("/{file_id}", response_model=PaperResponse)
-async def get_workspace_file(
+@router.get("/{file_id}/sentences")
+async def get_workspace_file_sentences(
     workspace_id: UUID,
     file_id: str,
     workspace: Workspace = Depends(get_workspace_for_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    取得工作區內指定檔案的詳細資訊
+    獲取工作區中指定檔案的句子
     """
     try:
-        paper = await db_service.get_paper_by_id_and_workspace(db, file_id, workspace_id)
-        if not paper:
+        # 1. 驗證論文屬於工作區
+        paper = await db_service.get_paper_by_id(db, file_id)
+        if not paper or str(paper.workspace_id) != str(workspace_id):
             raise APIError(
                 error_code=ErrorCodes.NOT_FOUND,
-                detail="檔案不存在或不屬於此工作區",
+                message="檔案不存在或不屬於此工作區",
                 status_code=status.HTTP_404_NOT_FOUND
             )
         
-        return PaperResponse.model_validate(paper)
+        # 2. 獲取該論文的句子
+        from sqlalchemy import select
+        from ..models.paper import Sentence
         
-    except HTTPException:
-        raise
-    except APIError:
-        raise
+        query = select(Sentence).where(Sentence.paper_id == file_id)
+        result = await db.execute(query)
+        sentences = result.scalars().all()
+        
+        # 3. 格式化句子資料
+        formatted_sentences = []
+        for sentence in sentences:
+            formatted_sentences.append({
+                "id": str(sentence.id),
+                "content": sentence.content,
+                "type": sentence.defining_type or "regular",
+                "reason": getattr(sentence, 'explanation', None),
+                "pageNumber": sentence.page_num,
+                "fileName": paper.file_name,
+                "fileId": str(paper.id),
+                "sentenceOrder": sentence.sentence_order,
+                "sectionId": sentence.section_id,
+                "confidence": getattr(sentence, 'confidence', None),
+                "wordCount": len(sentence.content.split()) if sentence.content else 0
+            })
+        
+        logger.info(f"工作區 {workspace_id} 檔案 {file_id} 獲取句子: {len(formatted_sentences)} 個句子")
+        
+        return {
+            "paper_id": file_id,
+            "sentences": formatted_sentences,
+            "total_count": len(formatted_sentences),
+            "processing_status": paper.processing_status
+        }
+        
     except Exception as e:
-        logger.error(f"取得檔案詳細資訊失敗: {str(e)}")
+        logger.error(f"獲取工作區檔案句子失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"取得檔案詳細資訊失敗: {str(e)}",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-@router.delete("/{file_id}")
-async def delete_workspace_file(
-    workspace_id: UUID,
-    file_id: str,
-    workspace: Workspace = Depends(get_workspace_for_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    刪除工作區內的指定檔案
-    """
-    try:
-        # 檢查檔案是否存在且屬於此工作區
-        paper = await db_service.get_paper_by_id_and_workspace(db, file_id, workspace_id)
-        if not paper:
-            raise APIError(
-                error_code=ErrorCodes.NOT_FOUND,
-                detail="檔案不存在或不屬於此工作區",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-        
-        # 刪除檔案記錄和實體檔案
-        await db_service.delete_paper(db, file_id)
-        await file_service.delete_workspace_file(paper.file_hash, workspace_id)
-        
-        return {"success": True, "message": "檔案刪除成功"}
-        
-    except HTTPException:
-        raise
-    except APIError:
-        raise
-    except Exception as e:
-        logger.error(f"刪除檔案失敗: {str(e)}")
-        raise APIError(
-            error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"刪除檔案失敗: {str(e)}",
+            message=f"獲取檔案句子失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -355,13 +425,35 @@ async def get_selected_workspace_files(
     """
     try:
         papers = await db_service.get_selected_papers_by_workspace(db, workspace_id)
-        return [PaperResponse.model_validate(paper) for paper in papers]
+        
+        # 手動構建 PaperResponse 對象
+        paper_responses = []
+        for paper in papers:
+            paper_response = PaperResponse(
+                id=str(paper.id),
+                file_name=paper.file_name,
+                original_filename=paper.original_filename,
+                file_size=paper.file_size,
+                upload_timestamp=paper.upload_timestamp,
+                processing_status=paper.processing_status,
+                grobid_processed=paper.grobid_processed,
+                sentences_processed=paper.sentences_processed,
+                od_cd_processed=paper.od_cd_processed,
+                pdf_deleted=paper.pdf_deleted,
+                error_message=paper.error_message,
+                processing_completed_at=paper.processing_completed_at,
+                created_at=paper.created_at,
+                is_selected=True  # 已選取的檔案
+            )
+            paper_responses.append(paper_response)
+        
+        return paper_responses
         
     except Exception as e:
         logger.error(f"取得已選取檔案失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"取得已選取檔案失敗: {str(e)}",
+            message=f"取得已選取檔案失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -386,7 +478,7 @@ async def select_all_workspace_files(
         logger.error(f"選取所有檔案失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"選取所有檔案失敗: {str(e)}",
+            message=f"選取所有檔案失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -411,7 +503,131 @@ async def deselect_all_workspace_files(
         logger.error(f"取消選取所有檔案失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"取消選取所有檔案失敗: {str(e)}",
+            message=f"取消選取所有檔案失敗: {str(e)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@router.get("/{file_id}", response_model=PaperResponse)
+async def get_workspace_file(
+    workspace_id: UUID,
+    file_id: str,
+    workspace: Workspace = Depends(get_workspace_for_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    取得工作區內指定檔案的詳細資訊
+    """
+    try:
+        paper = await db_service.get_paper_by_id_and_workspace(db, file_id, workspace_id)
+        if not paper:
+            raise APIError(
+                error_code=ErrorCodes.NOT_FOUND,
+                message="檔案不存在或不屬於此工作區",
+                status_code=status.HTTP_404_NOT_FOUND
+            )
+        
+        return PaperResponse.model_validate(paper)
+        
+    except HTTPException:
+        raise
+    except APIError:
+        raise
+    except Exception as e:
+        logger.error(f"取得檔案詳細資訊失敗: {str(e)}")
+        raise APIError(
+            error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
+            message=f"取得檔案詳細資訊失敗: {str(e)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@router.delete("/{file_id}")
+async def delete_workspace_file(
+    workspace_id: UUID,
+    file_id: str,
+    workspace: Workspace = Depends(get_workspace_for_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    刪除工作區內的指定檔案
+    """
+    try:
+        # 檢查檔案是否存在且屬於此工作區
+        paper = await db_service.get_paper_by_id_and_workspace(db, file_id, workspace_id)
+        if not paper:
+            raise APIError(
+                error_code=ErrorCodes.NOT_FOUND,
+                message="檔案不存在或不屬於此工作區",
+                status_code=status.HTTP_404_NOT_FOUND
+            )
+        
+        # 刪除檔案記錄和實體檔案
+        await db_service.delete_paper(db, file_id)
+        await file_service.delete_workspace_file(paper.file_hash, workspace_id)
+        
+        return {"success": True, "message": "檔案刪除成功"}
+        
+    except HTTPException:
+        raise
+    except APIError:
+        raise
+    except Exception as e:
+        logger.error(f"刪除檔案失敗: {str(e)}")
+        raise APIError(
+            error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
+            message=f"刪除檔案失敗: {str(e)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+
+@router.put("/{file_id}/selection")
+async def toggle_workspace_file_selection(
+    workspace_id: UUID,
+    file_id: str,
+    selection_data: dict,
+    workspace: Workspace = Depends(get_workspace_for_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    切換工作區內指定檔案的選取狀態
+    """
+    try:
+        is_selected = selection_data.get("is_selected", True)
+        
+        # 檢查檔案是否存在且屬於此工作區
+        paper = await db_service.get_paper_by_id_and_workspace(db, file_id, workspace_id)
+        if not paper:
+            raise APIError(
+                error_code=ErrorCodes.NOT_FOUND,
+                message="檔案不存在或不屬於此工作區",
+                status_code=status.HTTP_404_NOT_FOUND
+            )
+        
+        # 更新選取狀態
+        if is_selected:
+            await db_service.mark_paper_selected(db, file_id)
+            message = f"檔案 {paper.original_filename} 已選取"
+        else:
+            await db_service.mark_paper_unselected(db, file_id)
+            message = f"檔案 {paper.original_filename} 已取消選取"
+        
+        return {
+            "success": True,
+            "message": message,
+            "paper_id": file_id,
+            "is_selected": is_selected,
+            "filename": paper.original_filename
+        }
+        
+    except HTTPException:
+        raise
+    except APIError:
+        raise
+    except Exception as e:
+        logger.error(f"切換檔案選取狀態失敗: {str(e)}")
+        raise APIError(
+            error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
+            message=f"切換檔案選取狀態失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -437,7 +653,7 @@ async def batch_select_workspace_files(
         logger.error(f"批次選取檔案失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"批次選取檔案失敗: {str(e)}",
+            message=f"批次選取檔案失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -458,7 +674,7 @@ async def get_workspace_files_sections_summary(
         logger.error(f"取得章節摘要失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"取得章節摘要失敗: {str(e)}",
+            message=f"取得章節摘要失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -488,7 +704,7 @@ async def get_workspace_upload_info(
         logger.error(f"取得上傳資訊失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"取得上傳資訊失敗: {str(e)}",
+            message=f"取得上傳資訊失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -498,21 +714,96 @@ async def cleanup_workspace_files(
     workspace: Workspace = Depends(get_workspace_for_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """清理工作區內的暫存檔案"""
+    """
+    清理工作區中的臨時檔案和失敗的處理記錄
+    """
     try:
-        cleanup_result = await file_service.cleanup_workspace_temp_files(workspace_id)
+        cleanup_stats = await file_service.cleanup_workspace_files(workspace_id)
+        
+        logger.info(f"工作區 {workspace_id} 清理完成: {cleanup_stats}")
         
         return {
             "success": True,
             "message": "工作區檔案清理完成",
-            "workspace_id": str(workspace_id),
-            **cleanup_result
+            "stats": cleanup_stats
         }
         
     except Exception as e:
         logger.error(f"清理工作區檔案失敗: {str(e)}")
         raise APIError(
             error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
-            detail=f"清理工作區檔案失敗: {str(e)}",
+            message=f"清理工作區檔案失敗: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+@router.get("/{file_id}/status")
+async def get_workspace_file_status(
+    workspace_id: UUID,
+    file_id: str,
+    workspace: Workspace = Depends(get_workspace_for_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    取得工作區內指定檔案的處理狀態
+    """
+    try:
+        # 檢查檔案是否存在且屬於此工作區
+        paper = await db_service.get_paper_by_id_and_workspace(db, file_id, workspace_id)
+        if not paper:
+            raise APIError(
+                error_code=ErrorCodes.NOT_FOUND,
+                message="檔案不存在或不屬於此工作區",
+                status_code=status.HTTP_404_NOT_FOUND
+            )
+        
+        # 如果仍在處理中，嘗試從 queue_service 獲取更詳細的即時進度
+        if paper.processing_status == "processing":
+            try:
+                from ..services.queue_service import queue_service
+                active_task = await queue_service.find_task_by_file_id(file_id)
+                if active_task:
+                    return {
+                        "status": "processing",
+                        "paper_id": str(paper.id),
+                        "progress": asdict(active_task.progress) if active_task.progress else {
+                            "percentage": 0,
+                            "step_name": "處理中..."
+                        },
+                        "task_id": active_task.task_id
+                    }
+            except Exception as e:
+                logger.warning(f"無法獲取任務進度: {e}")
+        
+        # 對於所有最終狀態（完成、錯誤）或其他狀態，直接返回資料庫中的權威狀態
+        status_mapping = {
+            "completed": "completed",
+            "failed": "error",
+            "processing": "processing",
+            "pending": "queued"
+        }
+        
+        return {
+            "status": status_mapping.get(paper.processing_status, paper.processing_status),
+            "paper_id": str(paper.id),
+            "progress": {
+                "percentage": 100.0 if paper.processing_status == "completed" else 0.0,
+                "step_name": "完成" if paper.processing_status == "completed" 
+                            else "失敗" if paper.processing_status == "failed" 
+                            else "處理中..." if paper.processing_status == "processing"
+                            else "排隊中..."
+            },
+            "error_message": getattr(paper, 'error_message', None)
+        }
+        
+    except HTTPException:
+        raise
+    except APIError:
+        raise
+    except Exception as e:
+        logger.error(f"取得檔案狀態失敗: {str(e)}")
+        raise APIError(
+            error_code=ErrorCodes.INTERNAL_SERVER_ERROR,
+            message=f"取得檔案狀態失敗: {str(e)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+

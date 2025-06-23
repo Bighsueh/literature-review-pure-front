@@ -6,14 +6,13 @@
 import React, { useCallback, useState, useRef } from 'react';
 import { 
   ArrowUpTrayIcon, 
-  ExclamationTriangleIcon,
   CheckCircleIcon,
   XCircleIcon,
   DocumentTextIcon,
   XMarkIcon
 } from '@heroicons/react/24/outline';
 import { useWorkspaceFileStore } from '../../stores/workspace/workspaceFileStore';
-import { useWorkspaceContext } from '../../contexts/WorkspaceContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
 import ProgressBar from '../common/ProgressBar/ProgressBar';
 
 interface WorkspaceFileUploadProps {
@@ -47,7 +46,7 @@ const WorkspaceFileUpload: React.FC<WorkspaceFileUploadProps> = ({
   maxFiles = 10,
   maxFileSize = 50 // 50MB
 }) => {
-  const { currentWorkspace } = useWorkspaceContext();
+  const { currentWorkspace } = useWorkspace();
   const { 
     papers, 
     uploadingFiles,
@@ -84,10 +83,20 @@ const WorkspaceFileUpload: React.FC<WorkspaceFileUploadProps> = ({
 
   // 檢查重複檔案
   const checkDuplicateFile = useCallback((file: File): { isDuplicate: boolean; duplicateFiles: string[] } => {
+    // 確保 papers 是有效的陣列
+    if (!Array.isArray(papers) || papers.length === 0) {
+      return {
+        isDuplicate: false,
+        duplicateFiles: []
+      };
+    }
+    
     const duplicateFiles = papers.filter(paper => 
-      paper.title === file.name || 
-      paper.title.includes(file.name.replace('.pdf', ''))
-    ).map(paper => paper.title);
+      paper?.file_name && (
+        paper.file_name === file.name || 
+        paper.file_name.includes(file.name.replace('.pdf', ''))
+      )
+    ).map(paper => paper.file_name);
     
     return {
       isDuplicate: duplicateFiles.length > 0,
@@ -166,6 +175,8 @@ const WorkspaceFileUpload: React.FC<WorkspaceFileUploadProps> = ({
                 : qItem
             )
           );
+          
+          console.log(`✅ 檔案上傳成功: ${item.file.name}, Paper ID: ${result.paper_id}`);
         } else {
           // 上傳失敗
           setUploadQueue(prev => 
@@ -372,7 +383,7 @@ const WorkspaceFileUpload: React.FC<WorkspaceFileUploadProps> = ({
                   <span className="text-sm font-medium text-gray-900">{upload.fileName}</span>
                   <span className="text-sm text-blue-600">{upload.progress}%</span>
                 </div>
-                <ProgressBar progress={upload.progress} />
+                <ProgressBar progress={upload.progress} stage="uploading" />
               </div>
             ))}
           </div>
@@ -453,7 +464,7 @@ const UploadItem: React.FC<{
         {/* 進度條 */}
         {item.status === 'uploading' && (
           <div className="mt-2">
-            <ProgressBar progress={item.progress} />
+            <ProgressBar progress={item.progress} stage="uploading" />
           </div>
         )}
       </div>

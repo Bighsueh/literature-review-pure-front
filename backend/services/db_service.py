@@ -4,7 +4,7 @@ from uuid import UUID
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, desc, and_, or_, func
+from sqlalchemy import select, update, delete, desc, and_, or_, func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..models.paper import (
@@ -17,6 +17,8 @@ from ..models.paper import (
 )
 from ..core.logging import get_logger
 from ..core.pagination import paginate_query, PaginatedResponse
+from ..models.user import User
+from ..models.user import Workspace
 
 logger = get_logger(__name__)
 
@@ -78,15 +80,28 @@ class DatabaseService:
         result = await db.execute(query)
         papers = []
         
-        for paper, is_selected, section_count, sentence_count in result:
+        for row in result:
+            # 正確解包查詢結果
+            paper = row[0]
+            is_selected = row[1] if len(row) > 1 else None
+            section_count = row[2] if len(row) > 2 else 0
+            sentence_count = row[3] if len(row) > 3 else 0
+            
             paper_dict = {
                 "id": str(paper.id),
                 "title": paper.original_filename or paper.file_name,
                 "file_path": paper.file_name,
                 "file_hash": paper.file_hash,
                 "upload_time": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
+                "upload_timestamp": paper.upload_timestamp,
                 "processing_status": paper.processing_status,
-                "selected": is_selected if is_selected is not None else False,
+                "grobid_processed": paper.grobid_processed,
+                "sentences_processed": paper.sentences_processed,
+                "od_cd_processed": paper.od_cd_processed,
+                "pdf_deleted": paper.pdf_deleted,
+                "error_message": paper.error_message,
+                "processing_completed_at": paper.processing_completed_at,
+                "is_selected": is_selected if is_selected is not None else False,
                 "authors": [],  # Placeholder, to be implemented
                 "section_count": section_count or 0,  # 修復：使用真實計數
                 "sentence_count": sentence_count or 0,  # 修復：使用真實計數
@@ -94,9 +109,7 @@ class DatabaseService:
                 # Keep original fields for compatibility if needed elsewhere
                 "original_filename": paper.original_filename,
                 "file_name": paper.file_name,
-                "upload_timestamp": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
-                "is_selected": is_selected if is_selected is not None else False,
-                "created_at": paper.created_at.isoformat() if paper.created_at else datetime.now().isoformat(),
+                "created_at": paper.created_at,
             }
             papers.append(paper_dict)
         
@@ -152,6 +165,16 @@ class DatabaseService:
         logger.info(f"開始儲存章節和句子資料 - paper_id: {paper_id}, sections: {len(sections_analysis)}, sentences: {len(sentences_data)}")
         
         try:
+            # 首先獲取paper的workspace_id
+            paper_query = select(Paper.workspace_id).where(Paper.id == paper_id)
+            paper_result = await db.execute(paper_query)
+            workspace_id = paper_result.scalar_one_or_none()
+            
+            if workspace_id is None:
+                raise ValueError(f"無法找到paper或workspace_id為空: {paper_id}")
+            
+            logger.info(f"取得paper的workspace_id: {workspace_id} - paper_id: {paper_id}")
+            
             # 1. 批次插入章節
             sections_to_insert = []
             for s in sections_analysis:
@@ -162,6 +185,7 @@ class DatabaseService:
                 sections_to_insert.append({
                     "id": s["section_id"], 
                     "paper_id": paper_id, 
+                    "workspace_id": workspace_id,  # 新增workspace_id
                     "section_type": s["section_type"],
                     "content": s["content"], 
                     "section_order": s.get("order"), 
@@ -169,7 +193,7 @@ class DatabaseService:
                 })
             
             if sections_to_insert:
-                logger.info(f"準備插入 {len(sections_to_insert)} 個章節")
+                logger.info(f"準備插入 {len(sections_to_insert)} 個章節 (含workspace_id: {workspace_id})")
                 stmt = pg_insert(PaperSection).values(sections_to_insert)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=['id'],
@@ -192,6 +216,7 @@ class DatabaseService:
                     "id": s["sentence_id"], 
                     "paper_id": paper_id, 
                     "section_id": s["section_id"],
+                    "workspace_id": workspace_id,  # 新增workspace_id
                     "content": s["text"], 
                     "word_count": s.get("word_count"),
                     "sentence_order": s.get("order", 0),
@@ -200,7 +225,7 @@ class DatabaseService:
                 })
             
             if sentences_to_insert:
-                logger.info(f"準備插入 {len(sentences_to_insert)} 個句子")
+                logger.info(f"準備插入 {len(sentences_to_insert)} 個句子 (含workspace_id: {workspace_id})")
                 stmt = pg_insert(Sentence).values(sentences_to_insert)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=['id'],
@@ -222,7 +247,7 @@ class DatabaseService:
             
             # 4. 關鍵修復：確保提交事務
             await db.commit()
-            logger.info(f"章節和句子資料已成功提交到資料庫 - paper_id: {paper_id}")
+            logger.info(f"章節和句子資料已成功提交到資料庫 - paper_id: {paper_id}, workspace_id: {workspace_id}")
             
             # 4.5 驗證狀態更新是否成功
             check_result = await db.execute(
@@ -599,7 +624,7 @@ class DatabaseService:
             logger.error(f"根據論文名稱和章節類型查詢句子失敗: {e}")
             return []
     
-    async def set_paper_selection(self, db: AsyncSession, paper_id: str, is_selected: bool) -> bool:
+    async def set_paper_selection(self, db: AsyncSession, paper_id: str, is_selected: bool, workspace_id: Optional[UUID] = None) -> bool:
         """設定論文選取狀態"""
         start_time = time.time()
         logger.info(f"開始設定論文選取狀態 - paper_id: {paper_id}, is_selected: {is_selected}")
@@ -611,22 +636,39 @@ class DatabaseService:
             except ValueError:
                 logger.error(f"無效的論文ID格式: {paper_id}")
                 return False
-            
+
+            # 如果沒有提供 workspace_id，從論文中獲取
+            if workspace_id is None:
+                paper_query = select(Paper.workspace_id).where(Paper.id == paper_id)
+                result = await db.execute(paper_query)
+                paper_workspace = result.scalar_one_or_none()
+                if not paper_workspace:
+                    logger.error(f"找不到論文或無法獲取工作區ID: {paper_id}")
+                    return False
+                workspace_id = paper_workspace
+
             # 使用超時保護包裝資料庫操作
             async def _perform_database_operation():
                 # 先嘗試更新現有記錄
                 logger.debug(f"嘗試更新現有選取記錄 - paper_id: {paper_id}")
                 update_query = (
                     update(PaperSelection)
-                    .where(PaperSelection.paper_id == paper_id)
+                    .where(and_(
+                        PaperSelection.paper_id == paper_id,
+                        PaperSelection.workspace_id == workspace_id
+                    ))
                     .values(is_selected=is_selected, selected_timestamp=func.current_timestamp())
                 )
                 result = await db.execute(update_query)
                 
                 # 如果沒有更新到任何記錄，表示不存在，需要建立新記錄
                 if result.rowcount == 0:
-                    logger.debug(f"創建新的選取記錄 - paper_id: {paper_id}")
-                    selection = PaperSelection(paper_id=paper_id, is_selected=is_selected)
+                    logger.debug(f"創建新的選取記錄 - paper_id: {paper_id}, workspace_id: {workspace_id}")
+                    selection = PaperSelection(
+                        paper_id=paper_id, 
+                        workspace_id=workspace_id,
+                        is_selected=is_selected
+                    )
                     db.add(selection)
                 
                 # 提交事務
@@ -640,9 +682,9 @@ class DatabaseService:
                 processing_time = time.time() - start_time
                 
                 if updated_rows == 0:
-                    logger.info(f"創建新選取記錄成功 - paper_id: {paper_id}, is_selected: {is_selected}, 處理時間: {processing_time:.3f}s")
+                    logger.info(f"創建新選取記錄成功 - paper_id: {paper_id}, workspace_id: {workspace_id}, is_selected: {is_selected}, 處理時間: {processing_time:.3f}s")
                 else:
-                    logger.info(f"更新現有選取記錄成功 - paper_id: {paper_id}, is_selected: {is_selected}, 處理時間: {processing_time:.3f}s")
+                    logger.info(f"更新現有選取記錄成功 - paper_id: {paper_id}, workspace_id: {workspace_id}, is_selected: {is_selected}, 處理時間: {processing_time:.3f}s")
                 
                 return True
                 
@@ -672,20 +714,24 @@ class DatabaseService:
             
             return False
     
-    async def mark_paper_selected(self, db: AsyncSession, paper_id: str) -> bool:
+    async def mark_paper_selected(self, db: AsyncSession, paper_id: str, workspace_id: Optional[UUID] = None) -> bool:
         """標記論文為已選取"""
-        return await self.set_paper_selection(db, paper_id, True)
+        return await self.set_paper_selection(db, paper_id, True, workspace_id)
+    
+    async def mark_paper_unselected(self, db: AsyncSession, paper_id: str, workspace_id: Optional[UUID] = None) -> bool:
+        """標記論文為未選取"""
+        return await self.set_paper_selection(db, paper_id, False, workspace_id)
     
     async def select_all_papers(self, db: AsyncSession) -> bool:
         """全選所有論文"""
         # 取得所有論文ID
-        papers_query = select(Paper.id)
+        papers_query = select(Paper.id, Paper.workspace_id)
         result = await db.execute(papers_query)
-        paper_ids = [str(row[0]) for row in result]
+        papers = result.all()
         
         # 為每個論文設定選取狀態
-        for paper_id in paper_ids:
-            await self.set_paper_selection(db, paper_id, True)
+        for paper_id, workspace_id in papers:
+            await self.set_paper_selection(db, str(paper_id), True, workspace_id)
         
         return True
     
@@ -929,83 +975,110 @@ class DatabaseService:
         selected_only: bool = False
     ) -> Any:  # PaginatedResponse[PaperResponse]
         """取得工作區內的論文列表，支援分頁"""
-        # 基本查詢
-        query = (
-            select(
-                Paper, 
-                PaperSelection.is_selected,
-                func.count(func.distinct(PaperSection.id)).label('section_count'),
-                func.count(func.distinct(Sentence.id)).label('sentence_count')
-            )
-            .outerjoin(PaperSelection, Paper.id == PaperSelection.paper_id)
-            .outerjoin(PaperSection, Paper.id == PaperSection.paper_id)
-            .outerjoin(Sentence, Paper.id == Sentence.paper_id)
-            .where(Paper.workspace_id == workspace_id)
-            .group_by(Paper.id, PaperSelection.is_selected)
-            .order_by(desc(Paper.created_at))
-        )
-        
-        # 如果只要已選取的檔案
-        if selected_only:
-            query = query.where(PaperSelection.is_selected == True)
-        
-        if pagination:
-            # 使用分頁
-            result = await paginate_query(db, query, pagination)
+        try:
+            # 簡化的查詢 - 先只取論文資料
+            papers_query = select(Paper).where(Paper.workspace_id == workspace_id).order_by(desc(Paper.created_at))
             
-            # 轉換資料格式
-            items = []
-            for paper, is_selected, section_count, sentence_count in result.items:
-                paper_dict = {
-                    "id": str(paper.id),
-                    "title": paper.original_filename or paper.file_name,
-                    "file_path": paper.file_name,
-                    "file_hash": paper.file_hash,
-                    "upload_time": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
-                    "processing_status": paper.processing_status,
-                    "selected": is_selected if is_selected is not None else False,
-                    "authors": [],
-                    "section_count": section_count or 0,
-                    "sentence_count": sentence_count or 0,
-                    "original_filename": paper.original_filename,
-                    "file_name": paper.file_name,
-                    "workspace_id": str(paper.workspace_id) if paper.workspace_id else None,
-                    "created_at": paper.created_at.isoformat() if paper.created_at else datetime.now().isoformat(),
-                }
-                items.append(paper_dict)
-            
-            return PaginatedResponse(
-                items=items,
-                total=result.total,
-                page=result.page,
-                size=result.size,
-                pages=result.pages
-            )
-        else:
-            # 不使用分頁
-            result = await db.execute(query)
-            papers = []
-            
-            for paper, is_selected, section_count, sentence_count in result:
-                paper_dict = {
-                    "id": str(paper.id),
-                    "title": paper.original_filename or paper.file_name,
-                    "file_path": paper.file_name,
-                    "file_hash": paper.file_hash,
-                    "upload_time": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
-                    "processing_status": paper.processing_status,
-                    "selected": is_selected if is_selected is not None else False,
-                    "authors": [],
-                    "section_count": section_count or 0,
-                    "sentence_count": sentence_count or 0,
-                    "original_filename": paper.original_filename,
-                    "file_name": paper.file_name,
-                    "workspace_id": str(paper.workspace_id) if paper.workspace_id else None,
-                    "created_at": paper.created_at.isoformat() if paper.created_at else datetime.now().isoformat(),
-                }
-                papers.append(paper_dict)
-            
-            return papers
+            if pagination:
+                # 使用分頁
+                items, meta = await paginate_query(db, papers_query, pagination)
+                formatted_items = []
+                
+                for paper in items:
+                    # 單獨查詢選取狀態
+                    selection_query = select(PaperSelection.is_selected).where(
+                        and_(
+                            PaperSelection.paper_id == paper.id,
+                            PaperSelection.workspace_id == workspace_id
+                        )
+                    )
+                    selection_result = await db.execute(selection_query)
+                    is_selected = selection_result.scalar_one_or_none()
+                    
+                    # 如果只要已選取的檔案且此檔案未選取，跳過
+                    if selected_only and not is_selected:
+                        continue
+                    
+                    paper_dict = {
+                        "id": str(paper.id),
+                        "title": paper.original_filename or paper.file_name,
+                        "file_path": paper.file_name,
+                        "file_hash": paper.file_hash,
+                        "upload_time": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
+                        "upload_timestamp": paper.upload_timestamp,
+                        "processing_status": paper.processing_status,
+                        "grobid_processed": paper.grobid_processed,
+                        "sentences_processed": paper.sentences_processed,
+                        "od_cd_processed": paper.od_cd_processed,
+                        "pdf_deleted": paper.pdf_deleted,
+                        "error_message": paper.error_message,
+                        "processing_completed_at": paper.processing_completed_at,
+                        "is_selected": is_selected if is_selected is not None else False,
+                        "authors": [],
+                        "section_count": 0,  # 暫時設為 0
+                        "sentence_count": 0,  # 暫時設為 0
+                        "original_filename": paper.original_filename,
+                        "file_name": paper.file_name,
+                        "workspace_id": str(paper.workspace_id) if paper.workspace_id else None,
+                        "created_at": paper.created_at,
+                    }
+                    formatted_items.append(paper_dict)
+                
+                return PaginatedResponse(
+                    items=formatted_items,
+                    meta=meta
+                )
+            else:
+                # 不使用分頁
+                result = await db.execute(papers_query)
+                papers = result.scalars().all()
+                formatted_papers = []
+                
+                for paper in papers:
+                    # 單獨查詢選取狀態
+                    selection_query = select(PaperSelection.is_selected).where(
+                        and_(
+                            PaperSelection.paper_id == paper.id,
+                            PaperSelection.workspace_id == workspace_id
+                        )
+                    )
+                    selection_result = await db.execute(selection_query)
+                    is_selected = selection_result.scalar_one_or_none()
+                    
+                    # 如果只要已選取的檔案且此檔案未選取，跳過
+                    if selected_only and not is_selected:
+                        continue
+                    
+                    paper_dict = {
+                        "id": str(paper.id),
+                        "title": paper.original_filename or paper.file_name,
+                        "file_path": paper.file_name,
+                        "file_hash": paper.file_hash,
+                        "upload_time": paper.upload_timestamp.isoformat() if paper.upload_timestamp else datetime.now().isoformat(),
+                        "upload_timestamp": paper.upload_timestamp,
+                        "processing_status": paper.processing_status,
+                        "grobid_processed": paper.grobid_processed,
+                        "sentences_processed": paper.sentences_processed,
+                        "od_cd_processed": paper.od_cd_processed,
+                        "pdf_deleted": paper.pdf_deleted,
+                        "error_message": paper.error_message,
+                        "processing_completed_at": paper.processing_completed_at,
+                        "is_selected": is_selected if is_selected is not None else False,
+                        "authors": [],
+                        "section_count": 0,  # 暫時設為 0
+                        "sentence_count": 0,  # 暫時設為 0
+                        "original_filename": paper.original_filename,
+                        "file_name": paper.file_name,
+                        "workspace_id": str(paper.workspace_id) if paper.workspace_id else None,
+                        "created_at": paper.created_at,
+                    }
+                    formatted_papers.append(paper_dict)
+                
+                return formatted_papers
+                
+        except Exception as e:
+            logger.error(f"取得工作區論文列表失敗: {str(e)}")
+            raise
     
     async def get_selected_papers_by_workspace(self, db: AsyncSession, workspace_id: UUID) -> List[Paper]:
         """取得工作區內已選取的論文"""
@@ -1015,6 +1088,7 @@ class DatabaseService:
             .where(
                 and_(
                     Paper.workspace_id == workspace_id,
+                    PaperSelection.workspace_id == workspace_id,
                     PaperSelection.is_selected == True
                 )
             )
@@ -1035,7 +1109,7 @@ class DatabaseService:
         
         # 批次設定選取狀態
         for paper_id in paper_ids:
-            await self.set_paper_selection(db, paper_id, True)
+            await self.set_paper_selection(db, paper_id, True, workspace_id)
         
         return len(paper_ids)
     
@@ -1051,7 +1125,7 @@ class DatabaseService:
         
         # 批次設定選取狀態
         for paper_id in paper_ids:
-            await self.set_paper_selection(db, paper_id, False)
+            await self.set_paper_selection(db, paper_id, False, workspace_id)
         
         return len(paper_ids)
     
@@ -1069,7 +1143,7 @@ class DatabaseService:
         
         # 批次設定選取狀態
         for paper_id in valid_paper_ids:
-            await self.set_paper_selection(db, paper_id, True)
+            await self.set_paper_selection(db, paper_id, True, workspace_id)
         
         return len(valid_paper_ids)
     
@@ -1134,6 +1208,272 @@ class DatabaseService:
         
         # 呼叫原有的搜尋方法，但限制在工作區內的論文
         return await self.search_sentences(db, paper_ids, defining_types, keywords)
+
+
+
+    async def get_papers_with_sections_summary(
+        self, 
+        db: AsyncSession, 
+        paper_ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        獲取論文及其章節摘要資訊
+        """
+        if not paper_ids:
+            return []
+            
+        try:
+            papers_summary = []
+            
+            for paper_id in paper_ids:
+                # 獲取論文基本資訊
+                stmt = select(Paper).where(Paper.id == paper_id)
+                result = await db.execute(stmt)
+                paper = result.scalar_one_or_none()
+                
+                if not paper:
+                    continue
+                
+                # 獲取章節資訊
+                sections_stmt = select(PaperSection).where(PaperSection.paper_id == paper_id)
+                sections_result = await db.execute(sections_stmt)
+                sections = sections_result.scalars().all()
+                
+                # 構建論文摘要
+                paper_summary = {
+                    'file_name': paper.file_name,
+                    'paper_id': str(paper.id),
+                    'title': paper.original_filename or paper.file_name or '',
+                    'workspace_id': str(paper.workspace_id),
+                    'sections': []
+                }
+                
+                for section in sections:
+                    # 獲取章節統計資訊
+                    sentence_stats = await self._get_section_sentence_stats(db, section.id)
+                    
+                    section_summary = {
+                        'section_type': section.section_type,
+                        'page_num': section.page_num or 0,
+                        'word_count': len(section.content.split()) if section.content else 0,
+                        'brief_content': (section.content or '')[:200] + "...",
+                        'od_count': sentence_stats.get('od_count', 0),
+                        'cd_count': sentence_stats.get('cd_count', 0),
+                        'total_sentences': sentence_stats.get('total_sentences', 0)
+                    }
+                    paper_summary['sections'].append(section_summary)
+                
+                papers_summary.append(paper_summary)
+            
+            logger.info(f"生成了 {len(papers_summary)} 篇論文的摘要")
+            return papers_summary
+            
+        except Exception as e:
+            logger.error(f"獲取論文摘要失敗: error={str(e)}")
+            return []
+
+    async def search_sentences_in_workspace(
+        self,
+        db: AsyncSession,
+        workspace_id: UUID,
+        defining_types: Optional[List[str]] = None,
+        keywords: Optional[List[str]] = None,
+        section_type: Optional[str] = None,
+        paper_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        在工作區範圍內搜尋句子 - 嚴格工作區隔離
+        """
+        try:
+            # 基本查詢：僅限於指定工作區的論文
+            query = text("""
+                SELECT 
+                    s.id as sentence_id,
+                    s.content,
+                    s.defining_type,
+                    s.page_num,
+                    s.sentence_order,
+                    p.file_name,
+                    ps.section_type,
+                    p.workspace_id
+                FROM sentences s
+                JOIN paper_sections ps ON s.section_id = ps.id
+                JOIN papers p ON ps.paper_id = p.id
+                WHERE p.workspace_id = :workspace_id
+            """)
+            
+            params = {'workspace_id': str(workspace_id)}
+            
+            # 添加定義類型過濾
+            if defining_types:
+                type_conditions = " OR ".join([f"s.defining_type = :type_{i}" for i in range(len(defining_types))])
+                query = text(str(query) + f" AND ({type_conditions})")
+                for i, dtype in enumerate(defining_types):
+                    params[f'type_{i}'] = dtype
+            
+            # 添加論文名稱過濾
+            if paper_name:
+                query = text(str(query) + " AND p.file_name = :paper_name")
+                params['paper_name'] = paper_name
+            
+            # 添加章節類型過濾
+            if section_type:
+                query = text(str(query) + " AND ps.section_type = :section_type")
+                params['section_type'] = section_type
+            
+            # 添加關鍵詞過濾
+            if keywords:
+                keyword_conditions = " OR ".join([f"LOWER(s.content) LIKE :keyword_{i}" for i in range(len(keywords))])
+                query = text(str(query) + f" AND ({keyword_conditions})")
+                for i, keyword in enumerate(keywords):
+                    params[f'keyword_{i}'] = f'%{keyword.lower()}%'
+            
+            query = text(str(query) + " ORDER BY p.file_name, ps.section_type, s.sentence_order")
+            
+            result = await db.execute(query, params)
+            rows = result.fetchall()
+            
+            sentences = []
+            for row in rows:
+                sentences.append({
+                    'sentence_id': row.sentence_id,
+                    'content': row.content,
+                    'defining_type': row.defining_type,
+                    'page_num': row.page_num,
+                    'sentence_order': row.sentence_order,
+                    'file_name': row.file_name,
+                    'section_type': row.section_type,
+                    'workspace_id': row.workspace_id
+                })
+            
+            logger.info(f"工作區 {workspace_id} 中搜尋到 {len(sentences)} 個句子")
+            return sentences
+            
+        except Exception as e:
+            logger.error(f"工作區句子搜尋失敗: workspace={workspace_id}, error={str(e)}")
+            return []
+
+    async def get_section_content_by_workspace(
+        self,
+        db: AsyncSession,
+        workspace_id: UUID,
+        paper_name: str,
+        section_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        獲取工作區範圍內的章節完整內容
+        """
+        try:
+            query = text("""
+                SELECT 
+                    ps.id as section_id,
+                    ps.content,
+                    ps.page_num,
+                    p.file_name,
+                    p.workspace_id
+                FROM paper_sections ps
+                JOIN papers p ON ps.paper_id = p.id
+                WHERE p.workspace_id = :workspace_id 
+                  AND p.file_name = :paper_name 
+                  AND ps.section_type = :section_type
+            """)
+            
+            result = await db.execute(query, {
+                'workspace_id': str(workspace_id),
+                'paper_name': paper_name,
+                'section_type': section_type
+            })
+            
+            row = result.fetchone()
+            if not row:
+                return None
+            
+            return {
+                'section_id': row.section_id,
+                'content': row.content,
+                'page_num': row.page_num,
+                'file_name': row.file_name,
+                'section_type': section_type,
+                'workspace_id': row.workspace_id
+            }
+            
+        except Exception as e:
+            logger.error(f"獲取工作區章節內容失敗: workspace={workspace_id}, paper={paper_name}, section={section_type}, error={str(e)}")
+            return None
+
+    async def _get_section_sentence_stats(
+        self,
+        db: AsyncSession,
+        section_id: str
+    ) -> Dict[str, int]:
+        """
+        獲取章節的句子統計資訊
+        """
+        try:
+            query = text("""
+                SELECT 
+                    COUNT(*) as total_sentences,
+                    SUM(CASE WHEN defining_type = 'OD' THEN 1 ELSE 0 END) as od_count,
+                    SUM(CASE WHEN defining_type = 'CD' THEN 1 ELSE 0 END) as cd_count
+                FROM sentences 
+                WHERE section_id = :section_id
+            """)
+            
+            result = await db.execute(query, {'section_id': section_id})
+            row = result.fetchone()
+            
+            return {
+                'total_sentences': row.total_sentences or 0,
+                'od_count': row.od_count or 0,
+                'cd_count': row.cd_count or 0
+            }
+            
+        except Exception as e:
+            logger.error(f"獲取章節統計失敗: section_id={section_id}, error={str(e)}")
+            return {'total_sentences': 0, 'od_count': 0, 'cd_count': 0}
+
+    async def verify_workspace_access(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        workspace_id: UUID
+    ) -> bool:
+        """
+        驗證用戶對工作區的存取權限
+        """
+        try:
+            # 檢查工作區是否屬於用戶
+            stmt = select(Workspace).where(
+                and_(
+                    Workspace.id == workspace_id,
+                    Workspace.user_id == user_id
+                )
+            )
+            result = await db.execute(stmt)
+            workspace = result.scalar_one_or_none()
+            
+            return workspace is not None
+            
+        except Exception as e:
+            logger.error(f"驗證工作區存取權限失敗: user={user_id}, workspace={workspace_id}, error={str(e)}")
+            return False
+
+    async def get_workspace_by_id(
+        self,
+        db: AsyncSession,
+        workspace_id: UUID
+    ) -> Optional[Workspace]:
+        """
+        根據ID獲取工作區資訊
+        """
+        try:
+            stmt = select(Workspace).where(Workspace.id == workspace_id)
+            result = await db.execute(stmt)
+            return result.scalar_one_or_none()
+            
+        except Exception as e:
+            logger.error(f"獲取工作區失敗: workspace_id={workspace_id}, error={str(e)}")
+            return None
 
 # 建立服務實例
 db_service = DatabaseService() 

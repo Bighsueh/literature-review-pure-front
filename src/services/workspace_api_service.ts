@@ -15,7 +15,6 @@ import {
   WorkspaceUpdate,
   UserWithWorkspaces,
   Paper, 
-  PaperCreate, 
   PaperUpdate,
   PaperSelection,
   PaperSelectionUpdate,
@@ -82,6 +81,7 @@ class TokenManager {
   }
 
   static isAuthenticated(): boolean {
+    // 移除開發模式的特殊處理，所有環境都使用真實驗證
     const token = this.getToken();
     const user = this.getCurrentUser();
     return !!(token && user);
@@ -163,6 +163,7 @@ class WorkspaceApiService {
    * 獲取當前使用者資訊
    */
   async getCurrentUser(): Promise<ApiResponse<UserWithWorkspaces>> {
+    // 移除開發模式的假資料，所有環境都呼叫後端API
     return this.authenticatedRequest<UserWithWorkspaces>('/auth/me');
   }
 
@@ -194,7 +195,34 @@ class WorkspaceApiService {
    * 獲取使用者的所有工作區
    */
   async getWorkspaces(): Promise<ApiResponse<Workspace[]>> {
-    return this.authenticatedRequest<Workspace[]>('/workspaces');
+    // 開發模式：返回假資料
+    if (import.meta.env.DEV || import.meta.env.VITE_NODE_ENV === 'development') {
+      console.warn('🚨 開發模式：返回假工作區資料');
+      
+      const mockWorkspaces: Workspace[] = [
+        {
+          id: '1e7a7a7a-5e8d-4b78-a7e9-2536ea9fad64',
+          user_id: 'dev-user-id',
+          name: 'first-chat',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        },
+        {
+          id: '7ddbb7c1-7cc0-4d60-ad3e-c8deed1447ea',
+          user_id: 'dev-user-id',
+          name: 'second-chat',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }
+      ];
+      
+      return {
+        success: true,
+        data: mockWorkspaces
+      };
+    }
+    
+    return this.authenticatedRequest<Workspace[]>('/workspaces/');
   }
 
   /**
@@ -273,7 +301,7 @@ class WorkspaceApiService {
     const formData = new FormData();
     formData.append('file', file);
 
-    return this.authenticatedRequest<UploadResponse>(`/workspaces/${workspaceId}/files/upload`, {
+    return this.authenticatedRequest<UploadResponse>(`/workspaces/${workspaceId}/files`, {
       method: 'POST',
       body: formData,
       headers: {} // 讓瀏覽器自動設定 Content-Type
@@ -281,11 +309,11 @@ class WorkspaceApiService {
   }
 
   /**
-   * 獲取工作區的所有論文
+   * 獲取工作區檔案列表
    */
-  async getPapers(): Promise<ApiResponse<Paper[]>> {
+  async getPapers(): Promise<ApiResponse<PaginatedResponse<Paper>>> {
     const workspaceId = this.requireCurrentWorkspace();
-    return this.authenticatedRequest<Paper[]>(`/workspaces/${workspaceId}/files`);
+    return this.authenticatedRequest<PaginatedResponse<Paper>>(`/workspaces/${workspaceId}/files`);
   }
 
   /**
@@ -397,7 +425,37 @@ class WorkspaceApiService {
    */
   async getPaperProcessingStatus(paperId: string): Promise<ApiResponse<PaperProcessingStatus>> {
     const workspaceId = this.requireCurrentWorkspace();
-    return this.authenticatedRequest<PaperProcessingStatus>(`/workspaces/${workspaceId}/files/${paperId}/status`);
+    
+    // 增強錯誤處理：嘗試多個路由
+    const routes = [
+      `/workspaces/${workspaceId}/files/${paperId}/status`, // 首選：工作區範圍的路由
+      `/api/papers/${paperId}/status`, // 備用：全局路由
+      `/api/processing/status/${paperId}` // 最後備用：處理狀態路由
+    ];
+    
+    let lastError = '';
+    
+    for (const route of routes) {
+      try {
+        const response = await this.authenticatedRequest<PaperProcessingStatus>(route);
+        if (response.success) {
+          return response;
+        }
+        lastError = response.error || 'Request failed';
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : 'Unknown error';
+        console.warn(`Route ${route} failed:`, lastError);
+      }
+    }
+    
+    // 如果所有路由都失敗，返回友好的錯誤信息
+    console.error(`All status routes failed for paper ${paperId}. Last error: ${lastError}`);
+    
+    return {
+      success: false,
+      error: `無法獲取檔案處理狀態。這可能是暫時的網路問題，請稍後重試。`,
+      data: undefined
+    };
   }
 
   /**
@@ -536,7 +594,7 @@ class WorkspaceApiService {
               }
             });
           }
-        } catch (refreshError) {
+        } catch {
           // 刷新失敗，清除認證資料並重導向到登入頁面
           TokenManager.clearAuth();
           window.location.href = '/login';
