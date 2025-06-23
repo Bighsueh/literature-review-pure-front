@@ -278,7 +278,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 app.include_router(auth_router, tags=["authentication"])
 app.include_router(workspaces_router, tags=["workspaces"])
 app.include_router(chats_router, tags=["chats"])
-app.include_router(legacy_router, tags=["legacy-data"])
+app.include_router(legacy_router, prefix="/api", tags=["legacy-data"])
 app.include_router(files_router, prefix="/api", tags=["upload"])
 app.include_router(papers_router, prefix="/api", tags=["papers"])
 app.include_router(processing_router, prefix="/api", tags=["processing"])

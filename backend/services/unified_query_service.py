@@ -250,10 +250,25 @@ class UnifiedQueryProcessor:
                 # 特殊處理：definitions focus_type
                 if focus_type == 'definitions':
                     # 提取關鍵詞
-                    keywords_result = await n8n_service.query_keyword_extraction(query)
+                    keywords_result = await n8n_service.extract_keywords(query)
                     keywords = []
-                    if isinstance(keywords_result, list) and keywords_result:
-                        keywords = keywords_result[0].get('output', {}).get('keywords', [])
+                    
+                    # 處理N8N關鍵詞提取API的不同回應格式
+                    if isinstance(keywords_result, dict):
+                        # 格式1: {"keywords": [...]}
+                        if 'keywords' in keywords_result:
+                            keywords = keywords_result.get('keywords', [])
+                        # 格式2: {"output": {"keywords": [...]}} (deprecated)
+                        elif 'output' in keywords_result and isinstance(keywords_result['output'], dict):
+                            keywords = keywords_result['output'].get('keywords', [])
+                    elif isinstance(keywords_result, list) and keywords_result:
+                        # 格式3: [{"output": {"keywords": [...]}}]
+                        first_item = keywords_result[0]
+                        if isinstance(first_item, dict):
+                            if 'keywords' in first_item:
+                                keywords = first_item.get('keywords', [])
+                            elif 'output' in first_item and isinstance(first_item['output'], dict):
+                                keywords = first_item['output'].get('keywords', [])
             
                     # 在工作區範圍內搜尋定義句子
                     definition_sentences = await db_service.search_sentences_in_workspace(

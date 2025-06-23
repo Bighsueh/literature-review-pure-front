@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { useAppStore } from '../stores/appStore';
 import { useChatStore } from '../stores/chatStore';
 import { apiService } from '../services/api_service';
-import { Message, Conversation, Reference } from '../types/chat';
+import { Conversation, Reference } from '../types/chat';
 import { createMessage, createSystemMessage, createErrorMessage } from '../utils/messageValidation';
 
 export const useQueryProcessor = () => {
@@ -82,7 +82,7 @@ export const useQueryProcessor = () => {
         isProcessing: true
       });
 
-      // 呼叫後端 /papers/unified-query
+      // 呼叫後端工作區化查詢端點 /workspaces/{id}/query/unified
       const apiResult = await apiService.query({ query: queryText });
 
       if (!apiResult.success || !apiResult.data) {
@@ -90,8 +90,8 @@ export const useQueryProcessor = () => {
       }
 
       // 修正數據路徑：從 results 中讀取實際的回應數據
-      const apiData = apiResult.data as any;
-      const results = apiData.results || apiData;
+      const apiData = apiResult.data as unknown as Record<string, unknown>;
+      const results = (apiData.results || apiData) as { response: string; references: Reference[] };
       const { response, references } = results;
 
       console.log('API 回應數據:', { response, references, fullData: apiResult.data });

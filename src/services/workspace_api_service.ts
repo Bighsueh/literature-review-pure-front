@@ -81,30 +81,7 @@ class TokenManager {
   }
 
   static isAuthenticated(): boolean {
-    // 開發模式：如果沒有 token，創建一個假的認證狀態
-    if (import.meta.env.DEV || import.meta.env.VITE_NODE_ENV === 'development') {
-      const token = this.getToken();
-      const user = this.getCurrentUser();
-      
-      // 如果沒有認證資料，創建開發模式的假資料
-      if (!token || !user) {
-        console.warn('🚨 開發模式：使用假認證資料');
-        this.setToken('dev-token-' + Date.now());
-        this.setCurrentUser({
-          id: 'dev-user-id',
-          google_id: 'dev-google-id',
-          email: 'dev@example.com',
-          name: '開發用戶',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        });
-        return true;
-      }
-      
-      return !!(token && user);
-    }
-    
-    // 生產模式：正常驗證
+    // 移除開發模式的特殊處理，所有環境都使用真實驗證
     const token = this.getToken();
     const user = this.getCurrentUser();
     return !!(token && user);
@@ -186,41 +163,7 @@ class WorkspaceApiService {
    * 獲取當前使用者資訊
    */
   async getCurrentUser(): Promise<ApiResponse<UserWithWorkspaces>> {
-    // 開發模式：返回假資料
-    if (import.meta.env.DEV || import.meta.env.VITE_NODE_ENV === 'development') {
-      console.warn('🚨 開發模式：返回假用戶資料');
-      
-      const mockUser: UserWithWorkspaces = {
-        id: 'dev-user-id',
-        google_id: 'dev-google-id',
-        email: 'dev@example.com',
-        name: '開發用戶',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        workspaces: [
-          {
-            id: '1e7a7a7a-5e8d-4b78-a7e9-2536ea9fad64',
-            user_id: 'dev-user-id',
-            name: 'first-chat',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          },
-          {
-            id: '7ddbb7c1-7cc0-4d60-ad3e-c8deed1447ea',
-            user_id: 'dev-user-id',
-            name: 'second-chat',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          }
-        ]
-      };
-      
-      return {
-        success: true,
-        data: mockUser
-      };
-    }
-    
+    // 移除開發模式的假資料，所有環境都呼叫後端API
     return this.authenticatedRequest<UserWithWorkspaces>('/auth/me');
   }
 
